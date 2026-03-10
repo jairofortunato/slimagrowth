@@ -265,7 +265,7 @@ export default function Home() {
               />
               <Tooltip
                 contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                formatter={(value: number) => [value, "Vendas"]}
+                formatter={(value) => [value as number, "Vendas"]}
               />
               <Bar dataKey="vendas" radius={[0, 4, 4, 0]}>
                 {barData.map((entry, index) => (
@@ -295,7 +295,7 @@ export default function Home() {
               />
               <Tooltip
                 contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                formatter={(value: number) => [formatCurrencyNum(value), "Receita"]}
+                formatter={(value) => [formatCurrencyNum(value as number), "Receita"]}
               />
               <Bar dataKey="revenue" fill="#C75028" radius={[0, 4, 4, 0]}>
                 {revenueBarData.map((entry, index) => (
@@ -322,9 +322,9 @@ export default function Home() {
               <YAxis tick={{ fontSize: 12, fill: "#9B9590" }} />
               <Tooltip
                 contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                labelFormatter={formatShortDate}
-                formatter={(value: number, name: string) => [
-                  name === "revenue" ? formatCurrencyNum(value) : value,
+                labelFormatter={(label) => formatShortDate(label as string)}
+                formatter={(value, name) => [
+                  name === "revenue" ? formatCurrencyNum(value as number) : value,
                   name === "revenue" ? "Receita" : "Vendas",
                 ]}
               />
