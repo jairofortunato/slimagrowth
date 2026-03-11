@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -9,8 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
-  LineChart,
-  Line,
+  Cell,
 } from "recharts";
 
 interface Sale {
@@ -35,6 +34,113 @@ interface DailySale {
   vendas: number;
   revenue: number;
 }
+
+interface FunnelData {
+  gastoMeta: number;
+  gastoGoogle: number;
+  cliquesMeta: number;
+  cliquesGoogle: number;
+  sessoesLanding: number;
+  sessoesForm: number;
+  leadsCheckpoint: number;
+  leadsCompleto: number;
+  formAprovados: number;
+  formRejeitados: number;
+  consultasAgendadas: number;
+  consultasFeitas: number;
+  vendasFunil: number;
+  faturamento: number;
+}
+
+const EMPTY_FUNNEL: FunnelData = {
+  gastoMeta: 0, gastoGoogle: 0, cliquesMeta: 0, cliquesGoogle: 0,
+  sessoesLanding: 0, sessoesForm: 0, leadsCheckpoint: 0, leadsCompleto: 0,
+  formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0,
+  vendasFunil: 0, faturamento: 0,
+};
+
+interface FunnelRowDef {
+  label: string;
+  field?: string;
+  sumOf?: [string, string];
+  prev?: string;
+  currency?: boolean;
+  bold?: boolean;
+  red?: boolean;
+  indent?: boolean;
+  noConv?: boolean;
+  noAccum?: boolean;
+  isBase?: boolean;
+  optional?: boolean;
+  auto?: boolean;
+}
+
+const FUNNEL_ROWS: FunnelRowDef[] = [
+  { label: "Valor Gasto Ads Total", sumOf: ["gastoMeta", "gastoGoogle"], currency: true, bold: true, red: true, noConv: true },
+  { label: "Valor Gasto Ads Meta", field: "gastoMeta", currency: true, indent: true, red: true, noConv: true, auto: true },
+  { label: "Valor Gasto Ads Google", field: "gastoGoogle", currency: true, indent: true, red: true, noConv: true, auto: true },
+  { label: "Cliques no Link Ads Total", sumOf: ["cliquesMeta", "cliquesGoogle"], bold: true, isBase: true },
+  { label: "Cliques no Link Ads Meta", field: "cliquesMeta", indent: true, noConv: true, auto: true },
+  { label: "Cliques no Link Ads Google", field: "cliquesGoogle", indent: true, noConv: true, auto: true },
+  { label: "Sessoes na Landing Page", field: "sessoesLanding", prev: "cliquesTotal", auto: true },
+  { label: "Sessoes na form/tela de produto", field: "sessoesForm", prev: "sessoesLanding", optional: true, auto: true },
+  { label: "Leads Formulario Checkpoint", field: "leadsCheckpoint", prev: "sessoesLanding", auto: true },
+  { label: "Leads Formulario Completo", field: "leadsCompleto", prev: "leadsCheckpoint", auto: true },
+  { label: "Formularios Aprovados", field: "formAprovados", prev: "leadsCompleto", auto: true },
+  { label: "Formularios Rejeitados", field: "formRejeitados", prev: "leadsCompleto", red: true, noAccum: true, auto: true },
+  { label: "Consultas Agendadas", field: "consultasAgendadas", prev: "formAprovados", auto: true },
+  { label: "Consultas Feitas", field: "consultasFeitas", prev: "consultasAgendadas", auto: true },
+  { label: "Vendas", field: "vendasFunil", prev: "formAprovados", bold: true, auto: true },
+  { label: "Faturamento", field: "faturamento", currency: true, bold: true, noConv: true, auto: true },
+];
+
+interface FunnelAfiliadosData {
+  gastoFixoProdutos: number;
+  leadsCheckpoint: number;
+  leadsCompleto: number;
+  formAprovados: number;
+  formRejeitados: number;
+  consultasAgendadas: number;
+  consultasFeitas: number;
+  vendasFunil: number;
+  faturamento: number;
+}
+
+const EMPTY_FUNNEL_AFILIADOS: FunnelAfiliadosData = {
+  gastoFixoProdutos: 0, leadsCheckpoint: 0, leadsCompleto: 0,
+  formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0,
+  consultasFeitas: 0, vendasFunil: 0, faturamento: 0,
+};
+
+const FUNNEL_AFILIADOS_ROWS: FunnelRowDef[] = [
+  { label: "Valor Gasto (fixo + produtos)", field: "gastoFixoProdutos", currency: true, bold: true, red: true, noConv: true },
+  { label: "Leads Formulario Checkpoint", field: "leadsCheckpoint", isBase: true, auto: true },
+  { label: "Leads Formulario Completo", field: "leadsCompleto", prev: "leadsCheckpoint", auto: true },
+  { label: "Formularios Aprovados", field: "formAprovados", prev: "leadsCompleto", auto: true },
+  { label: "Formularios Rejeitados", field: "formRejeitados", prev: "leadsCompleto", red: true, noAccum: true, auto: true },
+  { label: "Consultas Agendadas", field: "consultasAgendadas", prev: "formAprovados", auto: true },
+  { label: "Consultas Feitas", field: "consultasFeitas", prev: "consultasAgendadas", auto: true },
+  { label: "Vendas", field: "vendasFunil", prev: "formAprovados", bold: true, auto: true },
+  { label: "Faturamento", field: "faturamento", currency: true, bold: true, noConv: true, auto: true },
+];
+
+interface FunnelMedicosData {
+  gastoProdutosComissoes: number;
+  formAprovados: number;
+  vendasFeitas: number;
+  faturamento: number;
+}
+
+const EMPTY_FUNNEL_MEDICOS: FunnelMedicosData = {
+  gastoProdutosComissoes: 0, formAprovados: 0, vendasFeitas: 0, faturamento: 0,
+};
+
+const FUNNEL_MEDICOS_ROWS: FunnelRowDef[] = [
+  { label: "Valor Produtos + Comissoes", field: "gastoProdutosComissoes", currency: true, bold: true, red: true, noConv: true },
+  { label: "Formularios Aprovados", field: "formAprovados", isBase: true, auto: true },
+  { label: "Vendas Feitas", field: "vendasFeitas", prev: "formAprovados", bold: true, auto: true },
+  { label: "Faturamento", field: "faturamento", currency: true, bold: true, noConv: true, auto: true },
+];
 
 // Manual overrides for "venda sem atendimento" (by lead name)
 const SEM_ATENDIMENTO: Record<string, boolean> = {
@@ -76,7 +182,7 @@ function formatDate(dateStr: string) {
 }
 
 function formatCurrency(value: string | null) {
-  if (!value) return "—";
+  if (!value) return "\u2014";
   return `R$${parseFloat(value).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`;
 }
 
@@ -89,6 +195,29 @@ function formatShortDate(dateStr: string) {
   return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 }
 
+function formatMonth(monthStr: string) {
+  const [, m] = monthStr.split("-");
+  const months = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  return months[parseInt(m) - 1] || monthStr;
+}
+
+function formatNum(value: number) {
+  return value.toLocaleString("pt-BR");
+}
+
+function formatCurrencyFull(value: number) {
+  return `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatPct(value: number) {
+  return `${value.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
+function getFunnelRef(ref: string, f: Record<string, number>): number {
+  if (ref === "cliquesTotal") return (f["cliquesMeta"] || 0) + (f["cliquesGoogle"] || 0);
+  return f[ref] || 0;
+}
+
 export default function Home() {
   const [authed, setAuthed] = useState(false);
   const [password, setPassword] = useState("");
@@ -99,10 +228,135 @@ export default function Home() {
   const [revenueByPath, setRevenueByPath] = useState<Record<string, number>>({});
   const [dailySales, setDailySales] = useState<DailySale[]>([]);
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [channelLeads, setChannelLeads] = useState({ ads: 0, afiliados: 0, medicos: 0 });
+  const [channelFunnel, setChannelFunnel] = useState({
+    ads: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+    afiliados: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+    medicos: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+  });
   const [loading, setLoading] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    const res = await fetch("/api/sales");
+  // Date filter state
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  // Ads API metrics (Meta + GA4)
+  const [adsMetrics, setAdsMetrics] = useState({
+    gastoMeta: 0, gastoGoogle: 0,
+    cliquesMeta: 0, cliquesGoogle: 0,
+    sessoesLanding: 0, sessoesForm: 0,
+    loaded: false,
+  });
+
+  // Meta and funnel state
+  const [metaMensal, setMetaMensal] = useState(0);
+  const [metaInput, setMetaInput] = useState("");
+  const [funnel, setFunnel] = useState<FunnelData>(EMPTY_FUNNEL);
+  const [funnelInputs, setFunnelInputs] = useState<Record<string, string>>({});
+  const [funnelAfiliados, setFunnelAfiliados] = useState<FunnelAfiliadosData>(EMPTY_FUNNEL_AFILIADOS);
+  const [funnelAfiliadosInputs, setFunnelAfiliadosInputs] = useState<Record<string, string>>({});
+  const [funnelMedicos, setFunnelMedicos] = useState<FunnelMedicosData>(EMPTY_FUNNEL_MEDICOS);
+  const [funnelMedicosInputs, setFunnelMedicosInputs] = useState<Record<string, string>>({});
+
+  // Load saved settings from localStorage
+  useEffect(() => {
+    try {
+      const savedMeta = localStorage.getItem("slima_meta");
+      if (savedMeta) {
+        const val = parseFloat(savedMeta);
+        if (val > 0) {
+          setMetaMensal(val);
+          setMetaInput(val.toString());
+        }
+      }
+      const savedFunnel = localStorage.getItem("slima_funnel");
+      if (savedFunnel) {
+        const f = JSON.parse(savedFunnel) as FunnelData;
+        setFunnel(f);
+        const inputs: Record<string, string> = {};
+        for (const [k, v] of Object.entries(f)) {
+          if (v > 0) inputs[k] = v.toString();
+        }
+        setFunnelInputs(inputs);
+      }
+      const savedAfiliados = localStorage.getItem("slima_funnel_afiliados");
+      if (savedAfiliados) {
+        const f = JSON.parse(savedAfiliados) as FunnelAfiliadosData;
+        setFunnelAfiliados(f);
+        const inputs: Record<string, string> = {};
+        for (const [k, v] of Object.entries(f)) {
+          if (v > 0) inputs[k] = v.toString();
+        }
+        setFunnelAfiliadosInputs(inputs);
+      }
+      const savedMedicos = localStorage.getItem("slima_funnel_medicos");
+      if (savedMedicos) {
+        const f = JSON.parse(savedMedicos) as FunnelMedicosData;
+        setFunnelMedicos(f);
+        const inputs: Record<string, string> = {};
+        for (const [k, v] of Object.entries(f)) {
+          if (v > 0) inputs[k] = v.toString();
+        }
+        setFunnelMedicosInputs(inputs);
+      }
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  function handleMetaChange(value: string) {
+    setMetaInput(value);
+    const num = parseFloat(value) || 0;
+    setMetaMensal(num);
+    try {
+      localStorage.setItem("slima_meta", num.toString());
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleFunnelChange(field: keyof FunnelData, value: string) {
+    setFunnelInputs((prev) => ({ ...prev, [field]: value }));
+    const num = parseFloat(value) || 0;
+    const updated = { ...funnel, [field]: num };
+    setFunnel(updated);
+    try {
+      localStorage.setItem("slima_funnel", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleFunnelAfiliadosChange(field: keyof FunnelAfiliadosData, value: string) {
+    setFunnelAfiliadosInputs((prev) => ({ ...prev, [field]: value }));
+    const num = parseFloat(value) || 0;
+    const updated = { ...funnelAfiliados, [field]: num };
+    setFunnelAfiliados(updated);
+    try {
+      localStorage.setItem("slima_funnel_afiliados", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleFunnelMedicosChange(field: keyof FunnelMedicosData, value: string) {
+    setFunnelMedicosInputs((prev) => ({ ...prev, [field]: value }));
+    const num = parseFloat(value) || 0;
+    const updated = { ...funnelMedicos, [field]: num };
+    setFunnelMedicos(updated);
+    try {
+      localStorage.setItem("slima_funnel_medicos", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  const fetchData = useCallback(async (from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    const qs = params.toString();
+    const res = await fetch(`/api/sales${qs ? `?${qs}` : ""}`);
     if (res.status === 401) {
       setAuthed(false);
       return;
@@ -114,6 +368,30 @@ export default function Home() {
     setRevenueByPath(data.revenueByPath || {});
     setDailySales(data.dailySales || []);
     setTotalRevenue(data.totalRevenue || 0);
+    setChannelLeads(data.channelLeads || { ads: 0, afiliados: 0, medicos: 0 });
+    if (data.channelFunnel) setChannelFunnel(data.channelFunnel);
+  }, []);
+
+  const fetchAdsMetrics = useCallback(async (from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    const qs = params.toString();
+
+    const [metaRes, gaRes] = await Promise.all([
+      fetch(`/api/meta-ads${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/google-analytics${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch(() => ({})),
+    ]);
+
+    setAdsMetrics({
+      gastoMeta: metaRes.gastoMeta || 0,
+      gastoGoogle: gaRes.gastoGoogle || 0,
+      cliquesMeta: metaRes.cliquesMeta || 0,
+      cliquesGoogle: gaRes.cliquesGoogle || 0,
+      sessoesLanding: gaRes.sessoesLanding || 0,
+      sessoesForm: gaRes.sessoesForm || 0,
+      loaded: true,
+    });
   }, []);
 
   // Check if already authed on mount
@@ -128,17 +406,24 @@ export default function Home() {
           setRevenueByPath(data.revenueByPath || {});
           setDailySales(data.dailySales || []);
           setTotalRevenue(data.totalRevenue || 0);
+          setChannelLeads(data.channelLeads || { ads: 0, afiliados: 0, medicos: 0 });
+          if (data.channelFunnel) setChannelFunnel(data.channelFunnel);
         });
+        fetchAdsMetrics();
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-refresh every 30s
   useEffect(() => {
     if (!authed) return;
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(() => {
+      fetchData(dateFrom || undefined, dateTo || undefined);
+      fetchAdsMetrics(dateFrom || undefined, dateTo || undefined);
+    }, 30000);
     return () => clearInterval(interval);
-  }, [authed, fetchData]);
+  }, [authed, fetchData, fetchAdsMetrics, dateFrom, dateTo]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -151,7 +436,8 @@ export default function Home() {
     });
     if (res.ok) {
       setAuthed(true);
-      fetchData();
+      fetchData(dateFrom || undefined, dateTo || undefined);
+      fetchAdsMetrics(dateFrom || undefined, dateTo || undefined);
     } else {
       setError("Senha incorreta");
     }
@@ -171,13 +457,121 @@ export default function Home() {
   const totalSemAtendimento = enrichedAggregate.reduce((s, a) => s + a.sem_atendimento, 0);
   const ticketMedio = totalVendas > 0 ? totalRevenue / totalVendas : 0;
 
-  // Chart data: vendas por caminho
-  const barData = enrichedAggregate.map((a) => ({
-    name: PATH_LABELS[a.path] || a.path,
-    vendas: a.vendas,
-    revenue: revenueByPath[a.path] || 0,
-    fill: PATH_COLORS[a.path] || "#9CA3AF",
-  }));
+  const totalLeadsAll = Object.values(totalByPath).reduce((a, b) => a + b, 0);
+  const conversionRate = totalLeadsAll > 0 ? ((totalVendas / totalLeadsAll) * 100).toFixed(1) : "0";
+
+  // Monthly sales data
+  const monthlySalesData = useMemo(() => {
+    const monthMap: Record<string, { vendas: number; revenue: number }> = {};
+    for (const s of sales) {
+      const month = s.sale_date.slice(0, 7);
+      if (!monthMap[month]) monthMap[month] = { vendas: 0, revenue: 0 };
+      monthMap[month].vendas++;
+      monthMap[month].revenue += s.order_value ? parseFloat(s.order_value) : 0;
+    }
+    return Object.entries(monthMap)
+      .map(([month, data]) => ({ month, label: formatMonth(month), ...data }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+  }, [sales]);
+
+  // Current month metrics (for meta comparison)
+  const currentMonthMetrics = useMemo(() => {
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    let vendas = 0;
+    let revenue = 0;
+    for (const s of sales) {
+      if (s.sale_date.startsWith(ym)) {
+        vendas++;
+        revenue += s.order_value ? parseFloat(s.order_value) : 0;
+      }
+    }
+    return { vendas, revenue };
+  }, [sales]);
+
+  // Meta calculations
+  const metaCalcs = useMemo(() => {
+    if (!metaMensal || metaMensal <= 0) return null;
+    const now = new Date();
+    const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const currentDay = now.getDate();
+    const escalonado = (currentDay / totalDays) * metaMensal;
+    const gap = currentMonthMetrics.revenue - escalonado;
+    const progress = (currentMonthMetrics.revenue / metaMensal) * 100;
+    const remainingDays = totalDays - currentDay;
+    const needPerDay = remainingDays > 0 ? (metaMensal - currentMonthMetrics.revenue) / remainingDays : 0;
+    return { totalDays, currentDay, escalonado, gap, progress, remainingDays, needPerDay };
+  }, [metaMensal, currentMonthMetrics]);
+
+  // Funnel computed values (will be recalculated after effectiveAds is built)
+  let funnelCliquesTotal = 0;
+  let funnelGastoTotal = 0;
+
+  // Auto-populated channel data from API
+  const adsAutoData = useMemo(() => {
+    const adsSales = sales.filter(s => !s.is_affiliate && s.checkout_path !== "prescription_checkout");
+    return {
+      leadsCheckpoint: channelLeads.ads,
+      leadsCompleto: channelFunnel.ads.leadsCompleto,
+      formAprovados: channelFunnel.ads.formAprovados,
+      formRejeitados: channelFunnel.ads.formRejeitados,
+      consultasAgendadas: channelFunnel.ads.consultasAgendadas,
+      consultasFeitas: channelFunnel.ads.consultasFeitas,
+      vendasFunil: adsSales.length,
+      faturamento: adsSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
+    };
+  }, [sales, channelLeads, channelFunnel]);
+
+  const afiliadosAutoData = useMemo(() => {
+    const afSales = sales.filter(s => s.is_affiliate);
+    return {
+      leadsCheckpoint: channelLeads.afiliados,
+      leadsCompleto: channelFunnel.afiliados.leadsCompleto,
+      formAprovados: channelFunnel.afiliados.formAprovados,
+      formRejeitados: channelFunnel.afiliados.formRejeitados,
+      consultasAgendadas: channelFunnel.afiliados.consultasAgendadas,
+      consultasFeitas: channelFunnel.afiliados.consultasFeitas,
+      vendasFunil: afSales.length,
+      faturamento: afSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
+    };
+  }, [sales, channelLeads, channelFunnel]);
+
+  const medicosAutoData = useMemo(() => {
+    const medSales = sales.filter(s => s.checkout_path === "prescription_checkout");
+    return {
+      formAprovados: channelFunnel.medicos.formAprovados,
+      vendasFeitas: medSales.length,
+      faturamento: medSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
+    };
+  }, [sales, channelFunnel]);
+
+  // Effective funnels (merge manual + auto data + API ads metrics)
+  const effectiveAds: Record<string, number> = {
+    ...funnel,
+    ...adsAutoData,
+    ...(adsMetrics.loaded ? {
+      gastoMeta: adsMetrics.gastoMeta,
+      gastoGoogle: adsMetrics.gastoGoogle,
+      cliquesMeta: adsMetrics.cliquesMeta,
+      cliquesGoogle: adsMetrics.cliquesGoogle,
+      sessoesLanding: adsMetrics.sessoesLanding,
+      sessoesForm: adsMetrics.sessoesForm,
+    } : {}),
+  };
+  funnelCliquesTotal = (effectiveAds["cliquesMeta"] || 0) + (effectiveAds["cliquesGoogle"] || 0);
+  funnelGastoTotal = (effectiveAds["gastoMeta"] || 0) + (effectiveAds["gastoGoogle"] || 0);
+
+  const effectiveAfiliados: Record<string, number> = { ...funnelAfiliados, ...afiliadosAutoData };
+  const effectiveMedicos: Record<string, number> = { ...funnelMedicos, ...medicosAutoData };
+
+  // Protocol chart data (horizontal bars)
+  const protocolBarData = enrichedAggregate
+    .map((a) => ({
+      name: PATH_LABELS[a.path] || a.path,
+      vendas: a.vendas,
+      fill: PATH_COLORS[a.path] || "#9CA3AF",
+    }))
+    .sort((a, b) => b.vendas - a.vendas);
 
   // Revenue bar data
   const revenueBarData = enrichedAggregate.map((a) => ({
@@ -185,10 +579,6 @@ export default function Home() {
     revenue: revenueByPath[a.path] || 0,
     fill: PATH_COLORS[a.path] || "#9CA3AF",
   }));
-
-  // Total leads across all paths
-  const totalLeadsAll = Object.values(totalByPath).reduce((a, b) => a + b, 0);
-  const conversionRate = totalLeadsAll > 0 ? ((totalVendas / totalLeadsAll) * 100).toFixed(1) : "0";
 
   if (!authed) {
     return (
@@ -219,12 +609,131 @@ export default function Home() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
+      {/* Header */}
       <div className="flex items-baseline justify-between mb-8">
         <div>
           <p className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-1">SLIMA GROWTH</p>
           <h1 className="text-3xl font-bold">Dashboard</h1>
         </div>
         <p className="text-xs text-[#9B9590]">Atualiza a cada 30s</p>
+      </div>
+
+      {/* Date Filter */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg p-4 mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-xs font-medium tracking-widest uppercase text-[#C75028]">PERIODO</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setDateFrom(e.target.value);
+                fetchData(e.target.value || undefined, dateTo || undefined);
+                fetchAdsMetrics(e.target.value || undefined, dateTo || undefined);
+              }}
+              className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028]"
+            />
+            <span className="text-xs text-[#9B9590]">ate</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setDateTo(e.target.value);
+                fetchData(dateFrom || undefined, e.target.value || undefined);
+                fetchAdsMetrics(dateFrom || undefined, e.target.value || undefined);
+              }}
+              className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028]"
+            />
+          </div>
+          <div className="flex gap-1.5 ml-auto">
+            {[
+              { label: "7d", fn: () => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); } },
+              { label: "30d", fn: () => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); } },
+              { label: "Este mes", fn: () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; } },
+              { label: "3m", fn: () => { const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0, 10); } },
+            ].map((preset) => (
+              <button
+                key={preset.label}
+                onClick={() => {
+                  const from = preset.fn();
+                  const to = new Date().toISOString().slice(0, 10);
+                  setDateFrom(from);
+                  setDateTo(to);
+                  fetchData(from, to);
+                  fetchAdsMetrics(from, to);
+                }}
+                className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors"
+              >
+                {preset.label}
+              </button>
+            ))}
+            <button
+              onClick={() => {
+                setDateFrom("");
+                setDateTo("");
+                fetchData(undefined, undefined);
+                fetchAdsMetrics(undefined, undefined);
+              }}
+              className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors text-[#C75028]"
+            >
+              Tudo
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Meta Mensal Section */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028]">META MENSAL</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#9B9590]">R$</span>
+            <input
+              type="number"
+              value={metaInput}
+              onChange={(e) => handleMetaChange(e.target.value)}
+              placeholder="Definir meta..."
+              className="w-40 px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028] text-right"
+            />
+          </div>
+        </div>
+        {metaCalcs && (
+          <>
+            <div className="w-full bg-[#F0EDEA] rounded-full h-3 mb-3">
+              <div
+                className="h-3 rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min(metaCalcs.progress, 100)}%`,
+                  backgroundColor: metaCalcs.gap >= 0 ? "#059669" : "#DC2626",
+                }}
+              />
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-xs text-[#9B9590]">Realizado</p>
+                <p className="text-lg font-bold">{formatCurrencyNum(currentMonthMetrics.revenue)}</p>
+                <p className="text-xs text-[#9B9590]">{metaCalcs.progress.toFixed(1)}% da meta</p>
+              </div>
+              <div>
+                <p className="text-xs text-[#9B9590]">Escalonado (dia {metaCalcs.currentDay}/{metaCalcs.totalDays})</p>
+                <p className="text-lg font-bold">{formatCurrencyNum(metaCalcs.escalonado)}</p>
+                <p className={`text-xs font-medium ${metaCalcs.gap >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  {metaCalcs.gap >= 0 ? "+" : ""}{formatCurrencyNum(metaCalcs.gap)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-[#9B9590]">Falta</p>
+                <p className="text-lg font-bold">{formatCurrencyNum(Math.max(metaMensal - currentMonthMetrics.revenue, 0))}</p>
+                <p className="text-xs text-[#9B9590]">{metaCalcs.remainingDays} dias restantes</p>
+              </div>
+              <div>
+                <p className="text-xs text-[#9B9590]">Necessario/dia</p>
+                <p className="text-lg font-bold">{formatCurrencyNum(Math.max(metaCalcs.needPerDay, 0))}</p>
+                <p className="text-xs text-[#9B9590]">para atingir a meta</p>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* KPI Cards */}
@@ -248,106 +757,343 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-        {/* Vendas por Caminho */}
-        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">Vendas por Caminho</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={barData} layout="vertical" margin={{ left: 20, right: 20, top: 5, bottom: 5 }}>
+      {/* Monthly Sales Vertical Bar Chart */}
+      {monthlySalesData.length > 0 && (
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
+          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDAS POR MES</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={monthlySalesData} margin={{ left: 10, right: 20, top: 5, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
-              <XAxis type="number" tick={{ fontSize: 12, fill: "#9B9590" }} />
-              <YAxis
-                type="category"
-                dataKey="name"
-                tick={{ fontSize: 11, fill: "#6B6560" }}
-                width={130}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                formatter={(value) => [value as number, "Vendas"]}
-              />
-              <Bar dataKey="vendas" radius={[0, 4, 4, 0]}>
-                {barData.map((entry, index) => (
-                  <rect key={index} fill={entry.fill} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Receita por Caminho */}
-        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">Receita por Caminho</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={revenueBarData} layout="vertical" margin={{ left: 20, right: 20, top: 5, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
-              <XAxis
-                type="number"
-                tick={{ fontSize: 12, fill: "#9B9590" }}
-                tickFormatter={(v) => `R$${(v / 1000).toFixed(0)}k`}
-              />
-              <YAxis
-                type="category"
-                dataKey="name"
-                tick={{ fontSize: 11, fill: "#6B6560" }}
-                width={130}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                formatter={(value) => [formatCurrencyNum(value as number), "Receita"]}
-              />
-              <Bar dataKey="revenue" fill="#C75028" radius={[0, 4, 4, 0]}>
-                {revenueBarData.map((entry, index) => (
-                  <rect key={index} fill={entry.fill} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Daily Sales Line Chart */}
-      {dailySales.length > 1 && (
-        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-10">
-          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">Vendas por Dia</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={dailySales} margin={{ left: 10, right: 20, top: 5, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: "#9B9590" }}
-                tickFormatter={formatShortDate}
-              />
+              <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#6B6560" }} />
               <YAxis tick={{ fontSize: 12, fill: "#9B9590" }} />
               <Tooltip
                 contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                labelFormatter={(label) => formatShortDate(label as string)}
                 formatter={(value, name) => [
                   name === "revenue" ? formatCurrencyNum(value as number) : value,
                   name === "revenue" ? "Receita" : "Vendas",
                 ]}
               />
-              <Line
-                type="monotone"
-                dataKey="vendas"
-                stroke="#C75028"
-                strokeWidth={2}
-                dot={{ fill: "#C75028", r: 4 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="revenue"
-                stroke="#2563EB"
-                strokeWidth={2}
-                dot={{ fill: "#2563EB", r: 4 }}
-                yAxisId={1}
-                hide
-              />
-            </LineChart>
+              <Bar dataKey="vendas" fill="#C75028" radius={[4, 4, 0, 0]} name="Vendas" />
+              <Bar dataKey="revenue" fill="#2563EB" radius={[4, 4, 0, 0]} name="Receita" />
+            </BarChart>
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* Vendas por Protocolo */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-10">
+        <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDAS POR PROTOCOLO</h3>
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={protocolBarData} layout="vertical" margin={{ left: 20, right: 20, top: 5, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
+            <XAxis type="number" tick={{ fontSize: 12, fill: "#9B9590" }} />
+            <YAxis
+              type="category"
+              dataKey="name"
+              tick={{ fontSize: 11, fill: "#6B6560" }}
+              width={130}
+            />
+            <Tooltip
+              contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
+              formatter={(value) => [value as number, "Vendas"]}
+            />
+            <Bar dataKey="vendas" radius={[0, 4, 4, 0]}>
+              {protocolBarData.map((entry, index) => (
+                <Cell key={index} fill={entry.fill} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Funnels Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-10">
+
+        {/* ── CANAL ADS ── */}
+        <div className="rounded-lg overflow-hidden border border-[#E5E2DC] flex flex-col">
+          <div className="bg-[#1A1A1A] text-white px-4 py-4 text-center">
+            <h3 className="text-lg font-bold tracking-wide">CANAL ADS</h3>
+          </div>
+          <div className="overflow-x-auto flex-1">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[#2A2A2A] text-white">
+                  <th className="text-left px-3 py-2 font-medium text-[10px] uppercase tracking-wide">Etapa do Funil</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Qtd</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Conv.</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Acum.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {FUNNEL_ROWS.map((row, idx) => {
+                  let value = 0;
+                  if (row.sumOf) {
+                    value = (effectiveAds[row.sumOf[0]] || 0) + (effectiveAds[row.sumOf[1]] || 0);
+                  } else if (row.field) {
+                    value = effectiveAds[row.field] || 0;
+                  }
+                  const isOptionalEmpty = row.optional && value === 0;
+
+                  let convRate = "\u2014";
+                  if (!row.noConv) {
+                    if (row.isBase) convRate = "\u2014";
+                    else if (isOptionalEmpty) convRate = "x";
+                    else if (row.prev) {
+                      const prevVal = getFunnelRef(row.prev, effectiveAds);
+                      convRate = prevVal > 0 ? formatPct((value / prevVal) * 100) : "\u2014";
+                    }
+                  }
+
+                  let convAccum = "\u2014";
+                  if (!row.noConv && !row.noAccum) {
+                    if (row.isBase) convAccum = "100%";
+                    else if (isOptionalEmpty) convAccum = "x";
+                    else if (row.prev) {
+                      convAccum = funnelCliquesTotal > 0 ? formatPct((value / funnelCliquesTotal) * 100) : "\u2014";
+                    }
+                  }
+
+                  let displayValue: React.ReactNode;
+                  if (isOptionalEmpty) {
+                    displayValue = <span className="text-[#9B9590]">x</span>;
+                  } else if (row.auto) {
+                    displayValue = (
+                      <span className={`font-semibold ${row.red ? "text-red-600" : ""}`}>
+                        {row.currency ? formatCurrencyFull(value) : formatNum(value)}
+                      </span>
+                    );
+                  } else if (row.field) {
+                    displayValue = (
+                      <input
+                        type="number"
+                        value={funnelInputs[row.field] ?? ""}
+                        onChange={(e) => handleFunnelChange(row.field! as keyof FunnelData, e.target.value)}
+                        placeholder="0"
+                        className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""}`}
+                      />
+                    );
+                  } else if (row.sumOf) {
+                    displayValue = (
+                      <span className={row.red ? "text-red-600 font-semibold" : "font-semibold"}>
+                        {row.currency ? formatCurrencyFull(value) : formatNum(value)}
+                      </span>
+                    );
+                  }
+
+                  return (
+                    <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
+                      <td className={`px-3 py-2 text-xs ${row.indent ? "pl-6" : ""} ${row.bold ? "font-bold" : ""}`}>
+                        {row.label}
+                      </td>
+                      <td className="px-2 py-2 text-center text-xs">{displayValue}</td>
+                      <td className={`px-2 py-2 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>{convRate}</td>
+                      <td className="px-2 py-2 text-center text-xs text-[#059669]">{convAccum}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="bg-[#F9F8F6] border-t border-[#E5E2DC] p-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">CPA</p>
+                <p className="text-sm font-bold">
+                  {funnelGastoTotal > 0 && adsAutoData.vendasFunil > 0 ? formatCurrencyFull(funnelGastoTotal / adsAutoData.vendasFunil) : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROAS</p>
+                <p className="text-sm font-bold">
+                  {funnelGastoTotal > 0 && adsAutoData.faturamento > 0 ? `${(adsAutoData.faturamento / funnelGastoTotal).toFixed(1)}x` : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Investimento</p>
+                <p className="text-sm font-bold">{formatCurrencyFull(funnelGastoTotal)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROI</p>
+                <p className={`text-sm font-bold ${funnelGastoTotal > 0 && adsAutoData.faturamento > funnelGastoTotal ? "text-green-600" : funnelGastoTotal > 0 ? "text-red-600" : ""}`}>
+                  {funnelGastoTotal > 0 ? `${(((adsAutoData.faturamento - funnelGastoTotal) / funnelGastoTotal) * 100).toFixed(0)}%` : "\u2014"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── CANAL AFILIADOS ── */}
+        <div className="rounded-lg overflow-hidden border border-[#E5E2DC] flex flex-col">
+          <div className="bg-[#1A1A1A] text-white px-4 py-4 text-center">
+            <h3 className="text-lg font-bold tracking-wide">CANAL AFILIADOS</h3>
+          </div>
+          <div className="overflow-x-auto flex-1">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[#2A2A2A] text-white">
+                  <th className="text-left px-3 py-2 font-medium text-[10px] uppercase tracking-wide">Etapa do Funil</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Qtd</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Conv.</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Acum.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {FUNNEL_AFILIADOS_ROWS.map((row, idx) => {
+                  const value = effectiveAfiliados[row.field!] || 0;
+                  const accumBase = effectiveAfiliados["leadsCheckpoint"] || 0;
+
+                  let convRate = "\u2014";
+                  if (!row.noConv) {
+                    if (row.isBase) convRate = "\u2014";
+                    else if (row.prev) {
+                      const prevVal = effectiveAfiliados[row.prev] || 0;
+                      convRate = prevVal > 0 ? formatPct((value / prevVal) * 100) : "\u2014";
+                    }
+                  }
+
+                  let convAccum = "\u2014";
+                  if (!row.noConv && !row.noAccum) {
+                    if (row.isBase) convAccum = "100%";
+                    else if (row.prev) {
+                      convAccum = accumBase > 0 ? formatPct((value / accumBase) * 100) : "\u2014";
+                    }
+                  }
+
+                  return (
+                    <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
+                      <td className={`px-3 py-2 text-xs ${row.bold ? "font-bold" : ""}`}>{row.label}</td>
+                      <td className="px-2 py-2 text-center text-xs">
+                        {row.auto ? (
+                          <span className={`font-semibold ${row.red ? "text-red-600" : ""}`}>
+                            {row.currency ? formatCurrencyFull(value) : formatNum(value)}
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            value={funnelAfiliadosInputs[row.field!] ?? ""}
+                            onChange={(e) => handleFunnelAfiliadosChange(row.field! as keyof FunnelAfiliadosData, e.target.value)}
+                            placeholder="0"
+                            className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""}`}
+                          />
+                        )}
+                      </td>
+                      <td className={`px-2 py-2 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>{convRate}</td>
+                      <td className="px-2 py-2 text-center text-xs text-[#059669]">{convAccum}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="bg-[#F9F8F6] border-t border-[#E5E2DC] p-4 mt-auto">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">CPA</p>
+                <p className="text-sm font-bold">
+                  {funnelAfiliados.gastoFixoProdutos > 0 && afiliadosAutoData.vendasFunil > 0 ? formatCurrencyFull(funnelAfiliados.gastoFixoProdutos / afiliadosAutoData.vendasFunil) : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROAS</p>
+                <p className="text-sm font-bold">
+                  {funnelAfiliados.gastoFixoProdutos > 0 && afiliadosAutoData.faturamento > 0 ? `${(afiliadosAutoData.faturamento / funnelAfiliados.gastoFixoProdutos).toFixed(1)}x` : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Investimento</p>
+                <p className="text-sm font-bold">{formatCurrencyFull(funnelAfiliados.gastoFixoProdutos)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROI</p>
+                <p className={`text-sm font-bold ${funnelAfiliados.gastoFixoProdutos > 0 && afiliadosAutoData.faturamento > funnelAfiliados.gastoFixoProdutos ? "text-green-600" : funnelAfiliados.gastoFixoProdutos > 0 ? "text-red-600" : ""}`}>
+                  {funnelAfiliados.gastoFixoProdutos > 0 ? `${(((afiliadosAutoData.faturamento - funnelAfiliados.gastoFixoProdutos) / funnelAfiliados.gastoFixoProdutos) * 100).toFixed(0)}%` : "\u2014"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── CANAL MEDICOS ── */}
+        <div className="rounded-lg overflow-hidden border border-[#E5E2DC] flex flex-col">
+          <div className="bg-[#1A1A1A] text-white px-4 py-4 text-center">
+            <h3 className="text-lg font-bold tracking-wide">CANAL MEDICOS</h3>
+          </div>
+          <div className="overflow-x-auto flex-1">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[#2A2A2A] text-white">
+                  <th className="text-left px-3 py-2 font-medium text-[10px] uppercase tracking-wide">Etapa do Funil</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Qtd</th>
+                  <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide">Conv.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {FUNNEL_MEDICOS_ROWS.map((row, idx) => {
+                  const value = effectiveMedicos[row.field!] || 0;
+
+                  let convRate = "\u2014";
+                  if (!row.noConv) {
+                    if (row.isBase) convRate = "\u2014";
+                    else if (row.prev) {
+                      const prevVal = effectiveMedicos[row.prev] || 0;
+                      convRate = prevVal > 0 ? formatPct((value / prevVal) * 100) : "\u2014";
+                    }
+                  }
+
+                  return (
+                    <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
+                      <td className={`px-3 py-2 text-xs ${row.bold ? "font-bold" : ""}`}>{row.label}</td>
+                      <td className="px-2 py-2 text-center text-xs">
+                        {row.auto ? (
+                          <span className={`font-semibold ${row.red ? "text-red-600" : ""}`}>
+                            {row.currency ? formatCurrencyFull(value) : formatNum(value)}
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            value={funnelMedicosInputs[row.field!] ?? ""}
+                            onChange={(e) => handleFunnelMedicosChange(row.field! as keyof FunnelMedicosData, e.target.value)}
+                            placeholder="0"
+                            className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""}`}
+                          />
+                        )}
+                      </td>
+                      <td className={`px-2 py-2 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>{convRate}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="bg-[#F9F8F6] border-t border-[#E5E2DC] p-4 mt-auto">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">CPA</p>
+                <p className="text-sm font-bold">
+                  {funnelMedicos.gastoProdutosComissoes > 0 && medicosAutoData.vendasFeitas > 0 ? formatCurrencyFull(funnelMedicos.gastoProdutosComissoes / medicosAutoData.vendasFeitas) : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROAS</p>
+                <p className="text-sm font-bold">
+                  {funnelMedicos.gastoProdutosComissoes > 0 && medicosAutoData.faturamento > 0 ? `${(medicosAutoData.faturamento / funnelMedicos.gastoProdutosComissoes).toFixed(1)}x` : "\u2014"}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Investimento</p>
+                <p className="text-sm font-bold">{formatCurrencyFull(funnelMedicos.gastoProdutosComissoes)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">ROI</p>
+                <p className={`text-sm font-bold ${funnelMedicos.gastoProdutosComissoes > 0 && medicosAutoData.faturamento > funnelMedicos.gastoProdutosComissoes ? "text-green-600" : funnelMedicos.gastoProdutosComissoes > 0 ? "text-red-600" : ""}`}>
+                  {funnelMedicos.gastoProdutosComissoes > 0 ? `${(((medicosAutoData.faturamento - funnelMedicos.gastoProdutosComissoes) / funnelMedicos.gastoProdutosComissoes) * 100).toFixed(0)}%` : "\u2014"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
 
       {/* Aggregate Table */}
       <div className="mb-10">
@@ -385,11 +1131,11 @@ export default function Home() {
                     <td className="px-4 py-2.5 text-center font-semibold">{a.vendas}</td>
                     <td className="px-4 py-2.5 text-right font-medium">{formatCurrencyNum(revenue)}</td>
                     <td className="px-4 py-2.5 text-right text-[#6B6560]">{formatCurrencyNum(ticket)}</td>
-                    <td className="px-4 py-2.5 text-center text-[#6B6560]">{totalByPath[a.path] || "—"}</td>
+                    <td className="px-4 py-2.5 text-center text-[#6B6560]">{totalByPath[a.path] || "\u2014"}</td>
                     <td className="px-4 py-2.5 text-center text-[#6B6560]">
                       {totalByPath[a.path]
                         ? `${((a.vendas / totalByPath[a.path]) * 100).toFixed(1)}%`
-                        : "—"}
+                        : "\u2014"}
                     </td>
                     <td className="px-4 py-2.5 text-center">{a.afiliado || ""}</td>
                     <td className="px-4 py-2.5 text-center">{a.sem_atendimento || ""}</td>
@@ -431,7 +1177,7 @@ export default function Home() {
             <tbody>
               {sales.map((s, i) => (
                 <tr key={`${s.id}-${i}`} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
-                  <td className="px-4 py-2.5 font-medium">{s.name || "—"}</td>
+                  <td className="px-4 py-2.5 font-medium">{s.name || "\u2014"}</td>
                   <td className="px-4 py-2.5 text-[#6B6560]">{formatDate(s.sale_date)}</td>
                   <td className="px-4 py-2.5">
                     <span
