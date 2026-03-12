@@ -268,6 +268,8 @@ export default function Home() {
     engagement: { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
   });
 
+  const [ga4Error, setGa4Error] = useState("");
+
   // Meta and funnel state
   const [metaMensal, setMetaMensal] = useState(0);
   const [metaInput, setMetaInput] = useState("");
@@ -421,6 +423,9 @@ export default function Home() {
       devices: gaRes.devices || [],
       engagement: gaRes.engagement || { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
     });
+
+    if (gaRes.error) setGa4Error(gaRes.error);
+    else setGa4Error("");
   }, []);
 
   // Check if already authed on mount
@@ -786,6 +791,13 @@ export default function Home() {
           <p className="text-xs text-[#9B9590] mt-1">{totalVendas} de {totalLeadsAll} leads</p>
         </div>
       </div>
+
+      {/* GA4 Error Banner */}
+      {ga4Error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
+          <p className="text-sm text-red-700"><span className="font-medium">GA4:</span> {ga4Error}</p>
+        </div>
+      )}
 
       {/* Engagement KPI Cards (GA4) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">

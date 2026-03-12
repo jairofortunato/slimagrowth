@@ -243,7 +243,8 @@ export async function GET(req: NextRequest) {
     cache = { data, key: cacheKey, ts: Date.now() };
     return NextResponse.json(data);
   } catch (err) {
-    console.error("GA4 API error:", err);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("GA4 API error:", errMsg);
     return NextResponse.json({
       sessoesLanding: 0,
       sessoesForm: 0,
@@ -255,7 +256,7 @@ export async function GET(req: NextRequest) {
       newVsReturning: [],
       devices: [],
       engagement: { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
-      error: "Failed to fetch GA4 data",
+      error: `GA4 error: ${errMsg}`,
     });
   }
 }
