@@ -412,9 +412,11 @@ export default function Home() {
     const qs = params.toString();
 
     const [metaRes, gaRes] = await Promise.all([
-      fetch(`/api/meta-ads${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch(() => ({})),
-      fetch(`/api/google-analytics${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch(() => ({})),
+      fetch(`/api/meta-ads${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch((e) => ({ error: `Fetch failed: ${e.message}` })),
+      fetch(`/api/google-analytics${qs ? `?${qs}` : ""}`).then((r) => r.json()).catch((e) => ({ error: `Fetch failed: ${e.message}` })),
     ]);
+    console.log("Meta API response:", JSON.stringify(metaRes).slice(0, 500));
+    console.log("GA4 API response:", JSON.stringify(gaRes).slice(0, 500));
 
     setAdsMetrics({
       gastoMeta: metaRes.gastoMeta || 0,
