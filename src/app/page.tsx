@@ -269,6 +269,17 @@ export default function Home() {
   });
 
   const [ga4Error, setGa4Error] = useState("");
+  const [metaError, setMetaError] = useState("");
+
+  // Meta Ads analytics data
+  const [metaData, setMetaData] = useState<{
+    impressions: number; reach: number; cpm: number; cpc: number; ctr: number; frequency: number;
+    campaigns: { name: string; spend: number; impressions: number; clicks: number; cpc: number; ctr: number; leads: number }[];
+    dailySpend: { date: string; spend: number; impressions: number; clicks: number }[];
+  }>({
+    impressions: 0, reach: 0, cpm: 0, cpc: 0, ctr: 0, frequency: 0,
+    campaigns: [], dailySpend: [],
+  });
 
   // Meta and funnel state
   const [metaMensal, setMetaMensal] = useState(0);
@@ -424,8 +435,21 @@ export default function Home() {
       engagement: gaRes.engagement || { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
     });
 
+    setMetaData({
+      impressions: metaRes.impressions || 0,
+      reach: metaRes.reach || 0,
+      cpm: metaRes.cpm || 0,
+      cpc: metaRes.cpc || 0,
+      ctr: metaRes.ctr || 0,
+      frequency: metaRes.frequency || 0,
+      campaigns: metaRes.campaigns || [],
+      dailySpend: metaRes.dailySpend || [],
+    });
+
     if (gaRes.error) setGa4Error(gaRes.error);
     else setGa4Error("");
+    if (metaRes.error) setMetaError(metaRes.error);
+    else setMetaError("");
   }, []);
 
   // Check if already authed on mount
@@ -792,10 +816,19 @@ export default function Home() {
         </div>
       </div>
 
-      {/* GA4 Error Banner */}
-      {ga4Error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4">
-          <p className="text-sm text-red-700"><span className="font-medium">GA4:</span> {ga4Error}</p>
+      {/* Error Banners */}
+      {(ga4Error || metaError) && (
+        <div className="space-y-2 mb-4">
+          {ga4Error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <p className="text-sm text-red-700"><span className="font-medium">GA4:</span> {ga4Error}</p>
+            </div>
+          )}
+          {metaError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <p className="text-sm text-red-700"><span className="font-medium">Meta:</span> {metaError}</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -1016,6 +1049,108 @@ export default function Home() {
           </BarChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Meta Ads Performance */}
+      {(metaData.impressions > 0 || metaData.campaigns.length > 0) && (
+        <>
+          {/* Meta KPI Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Impressoes</p>
+              <p className="text-xl font-bold">{formatNum(metaData.impressions)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Alcance</p>
+              <p className="text-xl font-bold">{formatNum(metaData.reach)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">CPM</p>
+              <p className="text-xl font-bold">R${metaData.cpm.toFixed(2)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">CPC</p>
+              <p className="text-xl font-bold">R${metaData.cpc.toFixed(2)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">CTR</p>
+              <p className="text-xl font-bold">{metaData.ctr.toFixed(2)}%</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Frequencia</p>
+              <p className="text-xl font-bold">{metaData.frequency.toFixed(2)}</p>
+            </div>
+          </div>
+
+          {/* Meta Daily Spend + Campaign Table */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+            {/* Daily Ad Spend Chart */}
+            {metaData.dailySpend.length > 0 && (
+              <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+                <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">GASTO DIARIO META ADS</h3>
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={metaData.dailySpend} margin={{ left: 10, right: 10, top: 5, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9B9590" }} tickFormatter={(v) => { const p = v.split("-"); return `${p[2]}/${p[1]}`; }} />
+                    <YAxis tick={{ fontSize: 11, fill: "#9B9590" }} tickFormatter={(v) => `R$${v}`} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
+                      labelFormatter={(v) => { const p = String(v).split("-"); return `${p[2]}/${p[1]}/${p[0]}`; }}
+                      formatter={(value, name) => {
+                        const labels: Record<string, string> = { spend: "Gasto", clicks: "Cliques", impressions: "Impressoes" };
+                        return [name === "spend" ? `R$${(value as number).toFixed(2)}` : formatNum(value as number), labels[name as string] || name];
+                      }}
+                    />
+                    <Bar dataKey="spend" fill="#C75028" radius={[3, 3, 0, 0]} name="spend" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Campaign Performance Table */}
+            {metaData.campaigns.length > 0 && (
+              <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+                <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">CAMPANHAS META ADS</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-[#E5E2DC]">
+                        <th className="text-left py-2 pr-2 font-medium text-[#9B9590]">Campanha</th>
+                        <th className="text-right py-2 px-2 font-medium text-[#9B9590]">Gasto</th>
+                        <th className="text-right py-2 px-2 font-medium text-[#9B9590]">Cliques</th>
+                        <th className="text-right py-2 px-2 font-medium text-[#9B9590]">CPC</th>
+                        <th className="text-right py-2 px-2 font-medium text-[#9B9590]">CTR</th>
+                        <th className="text-right py-2 pl-2 font-medium text-[#9B9590]">Impr.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {metaData.campaigns.map((c, i) => (
+                        <tr key={i} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
+                          <td className="py-2 pr-2 font-medium truncate max-w-[180px]" title={c.name}>{c.name}</td>
+                          <td className="py-2 px-2 text-right text-red-600 font-medium">R${c.spend.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right">{formatNum(c.clicks)}</td>
+                          <td className="py-2 px-2 text-right">R${c.cpc.toFixed(2)}</td>
+                          <td className="py-2 px-2 text-right">{c.ctr.toFixed(2)}%</td>
+                          <td className="py-2 pl-2 text-right text-[#9B9590]">{formatNum(c.impressions)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-[#E5E2DC] font-bold">
+                        <td className="py-2 pr-2">Total</td>
+                        <td className="py-2 px-2 text-right text-red-600">R${metaData.campaigns.reduce((s, c) => s + c.spend, 0).toFixed(2)}</td>
+                        <td className="py-2 px-2 text-right">{formatNum(metaData.campaigns.reduce((s, c) => s + c.clicks, 0))}</td>
+                        <td className="py-2 px-2 text-right">{metaData.campaigns.reduce((s, c) => s + c.clicks, 0) > 0 ? `R$${(metaData.campaigns.reduce((s, c) => s + c.spend, 0) / metaData.campaigns.reduce((s, c) => s + c.clicks, 0)).toFixed(2)}` : "\u2014"}</td>
+                        <td className="py-2 px-2 text-right">{metaData.ctr.toFixed(2)}%</td>
+                        <td className="py-2 pl-2 text-right text-[#9B9590]">{formatNum(metaData.campaigns.reduce((s, c) => s + c.impressions, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Funnels Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-10">
