@@ -10,7 +10,13 @@ import {
   ResponsiveContainer,
   CartesianGrid,
   Cell,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Legend,
 } from "recharts";
+import type { PieLabelRenderProps } from "recharts";
 
 interface Sale {
   id: string;
@@ -114,7 +120,8 @@ const EMPTY_FUNNEL_AFILIADOS: FunnelAfiliadosData = {
 
 const FUNNEL_AFILIADOS_ROWS: FunnelRowDef[] = [
   { label: "Valor Gasto (fixo + produtos)", field: "gastoFixoProdutos", currency: true, bold: true, red: true, noConv: true },
-  { label: "Leads Formulario Checkpoint", field: "leadsCheckpoint", isBase: true, auto: true },
+  { label: "Sessões Chat (Afiliados)", field: "sessoesAfiliados", isBase: true, auto: true, noConv: true },
+  { label: "Leads Formulario Checkpoint", field: "leadsCheckpoint", prev: "sessoesAfiliados", auto: true },
   { label: "Leads Formulario Completo", field: "leadsCompleto", prev: "leadsCheckpoint", auto: true },
   { label: "Formularios Aprovados", field: "formAprovados", prev: "leadsCompleto", auto: true },
   { label: "Formularios Rejeitados", field: "formRejeitados", prev: "leadsCompleto", red: true, noAccum: true, auto: true },
@@ -245,7 +252,20 @@ export default function Home() {
     gastoMeta: 0, gastoGoogle: 0,
     cliquesMeta: 0, cliquesGoogle: 0,
     sessoesLanding: 0, sessoesForm: 0,
+    sessoesAfiliados: 0,
     loaded: false,
+  });
+
+  // GA4 analytics data
+  const [ga4Data, setGa4Data] = useState<{
+    trafficSources: { channel: string; sessions: number }[];
+    dailySessions: { date: string; sessions: number; users: number }[];
+    newVsReturning: { type: string; users: number; sessions: number }[];
+    devices: { device: string; sessions: number }[];
+    engagement: { engagementRate: number; avgSessionDuration: number; sessionsPerUser: number; totalSessions: number; totalUsers: number };
+  }>({
+    trafficSources: [], dailySessions: [], newVsReturning: [], devices: [],
+    engagement: { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
   });
 
   // Meta and funnel state
@@ -390,7 +410,16 @@ export default function Home() {
       cliquesGoogle: gaRes.cliquesGoogle || 0,
       sessoesLanding: gaRes.sessoesLanding || 0,
       sessoesForm: gaRes.sessoesForm || 0,
+      sessoesAfiliados: gaRes.sessoesAfiliados || 0,
       loaded: true,
+    });
+
+    setGa4Data({
+      trafficSources: gaRes.trafficSources || [],
+      dailySessions: gaRes.dailySessions || [],
+      newVsReturning: gaRes.newVsReturning || [],
+      devices: gaRes.devices || [],
+      engagement: gaRes.engagement || { engagementRate: 0, avgSessionDuration: 0, sessionsPerUser: 0, totalSessions: 0, totalUsers: 0 },
     });
   }, []);
 
@@ -525,6 +554,7 @@ export default function Home() {
   const afiliadosAutoData = useMemo(() => {
     const afSales = sales.filter(s => s.is_affiliate);
     return {
+      sessoesAfiliados: adsMetrics.sessoesAfiliados,
       leadsCheckpoint: channelLeads.afiliados,
       leadsCompleto: channelFunnel.afiliados.leadsCompleto,
       formAprovados: channelFunnel.afiliados.formAprovados,
@@ -534,7 +564,7 @@ export default function Home() {
       vendasFunil: afSales.length,
       faturamento: afSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
     };
-  }, [sales, channelLeads, channelFunnel]);
+  }, [sales, channelLeads, channelFunnel, adsMetrics.sessoesAfiliados]);
 
   const medicosAutoData = useMemo(() => {
     const medSales = sales.filter(s => s.checkout_path === "prescription_checkout");
@@ -737,7 +767,7 @@ export default function Home() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
           <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Total Vendas</p>
           <p className="text-3xl font-bold">{totalVendas}</p>
@@ -756,6 +786,175 @@ export default function Home() {
           <p className="text-xs text-[#9B9590] mt-1">{totalVendas} de {totalLeadsAll} leads</p>
         </div>
       </div>
+
+      {/* Engagement KPI Cards (GA4) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Sessoes Totais</p>
+          <p className="text-3xl font-bold">{formatNum(ga4Data.engagement.totalSessions)}</p>
+          <p className="text-xs text-[#9B9590] mt-1">{formatNum(ga4Data.engagement.totalUsers)} usuarios</p>
+        </div>
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Taxa Engajamento</p>
+          <p className="text-3xl font-bold">{(ga4Data.engagement.engagementRate * 100).toFixed(1)}%</p>
+        </div>
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Duracao Media</p>
+          <p className="text-3xl font-bold">{ga4Data.engagement.avgSessionDuration > 0 ? `${Math.floor(ga4Data.engagement.avgSessionDuration / 60)}m${Math.round(ga4Data.engagement.avgSessionDuration % 60)}s` : "\u2014"}</p>
+        </div>
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Sessoes/Usuario</p>
+          <p className="text-3xl font-bold">{ga4Data.engagement.sessionsPerUser > 0 ? ga4Data.engagement.sessionsPerUser.toFixed(2) : "\u2014"}</p>
+        </div>
+      </div>
+
+      {/* GA4 Analytics Row: Traffic Sources + New vs Returning + Device Split */}
+      {ga4Data.trafficSources.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+          {/* Traffic Sources */}
+          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 lg:col-span-1">
+            <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">FONTES DE TRAFEGO</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={ga4Data.trafficSources.slice(0, 6).map(s => ({ name: s.channel, value: s.sessions }))}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={80}
+                  dataKey="value"
+                  paddingAngle={2}
+                  label={(props: PieLabelRenderProps) => `${props.name || ""} ${((props.percent || 0) * 100).toFixed(0)}%`}
+                  style={{ fontSize: 10 }}
+                >
+                  {ga4Data.trafficSources.slice(0, 6).map((_, i) => (
+                    <Cell key={i} fill={["#C75028", "#2563EB", "#059669", "#D97706", "#7C3AED", "#9CA3AF"][i]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }} formatter={(v) => [formatNum(v as number), "Sessoes"]} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-2 space-y-1">
+              {ga4Data.trafficSources.slice(0, 6).map((s, i) => {
+                const total = ga4Data.trafficSources.reduce((sum, x) => sum + x.sessions, 0);
+                return (
+                  <div key={s.channel} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: ["#C75028", "#2563EB", "#059669", "#D97706", "#7C3AED", "#9CA3AF"][i] }} />
+                      <span className="text-[#6B6560]">{s.channel}</span>
+                    </div>
+                    <span className="font-medium">{formatNum(s.sessions)} <span className="text-[#9B9590] font-normal">({total > 0 ? ((s.sessions / total) * 100).toFixed(1) : 0}%)</span></span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* New vs Returning */}
+          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+            <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">NOVOS VS RETORNANTES</h3>
+            {(() => {
+              const newUsers = ga4Data.newVsReturning.find(x => x.type === "new")?.users || 0;
+              const returning = ga4Data.newVsReturning.find(x => x.type === "returning")?.users || 0;
+              const total = newUsers + returning;
+              const newPct = total > 0 ? (newUsers / total) * 100 : 0;
+              const retPct = total > 0 ? (returning / total) * 100 : 0;
+              return (
+                <>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <PieChart>
+                      <Pie
+                        data={[{ name: "Novos", value: newUsers }, { name: "Retornantes", value: returning }]}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={50}
+                        outerRadius={80}
+                        dataKey="value"
+                        paddingAngle={2}
+                      >
+                        <Cell fill="#C75028" />
+                        <Cell fill="#2563EB" />
+                      </Pie>
+                      <Tooltip contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }} formatter={(v) => [formatNum(v as number), "Usuarios"]} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="space-y-2 mt-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs"><span className="w-2.5 h-2.5 rounded-full bg-[#C75028] inline-block" />Novos</div>
+                      <span className="text-sm font-bold">{formatNum(newUsers)} <span className="text-xs text-[#9B9590] font-normal">({newPct.toFixed(1)}%)</span></span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs"><span className="w-2.5 h-2.5 rounded-full bg-[#2563EB] inline-block" />Retornantes</div>
+                      <span className="text-sm font-bold">{formatNum(returning)} <span className="text-xs text-[#9B9590] font-normal">({retPct.toFixed(1)}%)</span></span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          {/* Device Split */}
+          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+            <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">DISPOSITIVOS</h3>
+            {(() => {
+              const total = ga4Data.devices.reduce((s, d) => s + d.sessions, 0);
+              return (
+                <div className="space-y-4 mt-4">
+                  {ga4Data.devices.map((d, i) => {
+                    const pct = total > 0 ? (d.sessions / total) * 100 : 0;
+                    const colors = ["#C75028", "#2563EB", "#059669"];
+                    const labels: Record<string, string> = { desktop: "Desktop", mobile: "Mobile", tablet: "Tablet" };
+                    return (
+                      <div key={d.device}>
+                        <div className="flex items-center justify-between text-xs mb-1.5">
+                          <span className="text-[#6B6560] font-medium">{labels[d.device] || d.device}</span>
+                          <span className="font-bold">{formatNum(d.sessions)} <span className="text-[#9B9590] font-normal">({pct.toFixed(1)}%)</span></span>
+                        </div>
+                        <div className="w-full bg-[#F0EDEA] rounded-full h-3">
+                          <div className="h-3 rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: colors[i] || "#9CA3AF" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Daily Traffic Trend + Sales */}
+      {ga4Data.dailySessions.length > 0 && (
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
+          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">TRAFEGO DIARIO VS VENDAS</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart
+              data={ga4Data.dailySessions.map(d => {
+                const daySale = dailySales.find(s => s.date === d.date);
+                return { date: d.date, sessoes: d.sessions, usuarios: d.users, vendas: daySale?.vendas || 0, revenue: daySale?.revenue || 0 };
+              })}
+              margin={{ left: 10, right: 20, top: 5, bottom: 5 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9B9590" }} tickFormatter={(v) => { const p = v.split("-"); return `${p[2]}/${p[1]}`; }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#9B9590" }} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#9B9590" }} />
+              <Tooltip
+                contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
+                labelFormatter={(v) => { const p = String(v).split("-"); return `${p[2]}/${p[1]}/${p[0]}`; }}
+                formatter={(value, name) => {
+                  const labels: Record<string, string> = { sessoes: "Sessoes", usuarios: "Usuarios", vendas: "Vendas", revenue: "Receita" };
+                  return [name === "revenue" ? formatCurrencyNum(value as number) : formatNum(value as number), labels[name as string] || name];
+                }}
+              />
+              <Legend formatter={(v) => { const m: Record<string, string> = { sessoes: "Sessoes", usuarios: "Usuarios", vendas: "Vendas" }; return m[v] || v; }} />
+              <Line yAxisId="left" type="monotone" dataKey="sessoes" stroke="#C75028" strokeWidth={2} dot={false} />
+              <Line yAxisId="left" type="monotone" dataKey="usuarios" stroke="#D97706" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+              <Line yAxisId="right" type="monotone" dataKey="vendas" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Monthly Sales Vertical Bar Chart */}
       {monthlySalesData.length > 0 && (
@@ -940,7 +1139,7 @@ export default function Home() {
               <tbody>
                 {FUNNEL_AFILIADOS_ROWS.map((row, idx) => {
                   const value = effectiveAfiliados[row.field!] || 0;
-                  const accumBase = effectiveAfiliados["leadsCheckpoint"] || 0;
+                  const accumBase = effectiveAfiliados["sessoesAfiliados"] || 0;
 
                   let convRate = "\u2014";
                   if (!row.noConv) {
