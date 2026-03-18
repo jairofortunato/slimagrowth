@@ -606,23 +606,31 @@ export default function Home() {
     };
   }, [sales, channelFunnel]);
 
+  // Helper: check if a field should be editable due to API error
+  const isApiFieldEditable = (field: string): boolean => {
+    if (metaError && (field === "gastoMeta" || field === "cliquesMeta")) return true;
+    if (ga4Error && (field === "gastoGoogle" || field === "cliquesGoogle" || field === "sessoesLanding" || field === "sessoesForm" || field === "sessoesAfiliados")) return true;
+    return false;
+  };
+
   // Effective funnels (merge manual + auto data + API ads metrics)
+  // When API has error, don't overwrite manual values with zeros
   const effectiveAds: Record<string, number> = {
     ...funnel,
     ...adsAutoData,
     ...(adsMetrics.loaded ? {
-      gastoMeta: adsMetrics.gastoMeta,
-      gastoGoogle: adsMetrics.gastoGoogle,
-      cliquesMeta: adsMetrics.cliquesMeta,
-      cliquesGoogle: adsMetrics.cliquesGoogle,
-      sessoesLanding: adsMetrics.sessoesLanding,
-      sessoesForm: adsMetrics.sessoesForm,
+      ...(!metaError ? { gastoMeta: adsMetrics.gastoMeta, cliquesMeta: adsMetrics.cliquesMeta } : {}),
+      ...(!ga4Error ? { gastoGoogle: adsMetrics.gastoGoogle, cliquesGoogle: adsMetrics.cliquesGoogle, sessoesLanding: adsMetrics.sessoesLanding, sessoesForm: adsMetrics.sessoesForm } : {}),
     } : {}),
   };
   funnelCliquesTotal = (effectiveAds["cliquesMeta"] || 0) + (effectiveAds["cliquesGoogle"] || 0);
   funnelGastoTotal = (effectiveAds["gastoMeta"] || 0) + (effectiveAds["gastoGoogle"] || 0);
 
-  const effectiveAfiliados: Record<string, number> = { ...funnelAfiliados, ...afiliadosAutoData };
+  const effectiveAfiliados: Record<string, number> = {
+    ...funnelAfiliados,
+    ...afiliadosAutoData,
+    ...(ga4Error ? { sessoesAfiliados: parseFloat(funnelAfiliadosInputs["sessoesAfiliados"] || "0") } : {}),
+  };
   const effectiveMedicos: Record<string, number> = { ...funnelMedicos, ...medicosAutoData };
 
   // Protocol chart data (horizontal bars)
@@ -1202,9 +1210,10 @@ export default function Home() {
                   }
 
                   let displayValue: React.ReactNode;
+                  const fieldEditable = row.field ? isApiFieldEditable(row.field) : false;
                   if (isOptionalEmpty) {
                     displayValue = <span className="text-[#9B9590]">x</span>;
-                  } else if (row.auto) {
+                  } else if (row.auto && !fieldEditable) {
                     displayValue = (
                       <span className={`font-semibold ${row.red ? "text-red-600" : ""}`}>
                         {row.currency ? formatCurrencyFull(value) : formatNum(value)}
@@ -1217,7 +1226,7 @@ export default function Home() {
                         value={funnelInputs[row.field] ?? ""}
                         onChange={(e) => handleFunnelChange(row.field! as keyof FunnelData, e.target.value)}
                         placeholder="0"
-                        className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""}`}
+                        className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""} ${fieldEditable ? "border-amber-400 bg-amber-50" : ""}`}
                       />
                     );
                   } else if (row.sumOf) {
@@ -1311,7 +1320,7 @@ export default function Home() {
                     <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
                       <td className={`px-3 py-2 text-xs ${row.bold ? "font-bold" : ""}`}>{row.label}</td>
                       <td className="px-2 py-2 text-center text-xs">
-                        {row.auto ? (
+                        {row.auto && !(row.field && isApiFieldEditable(row.field)) ? (
                           <span className={`font-semibold ${row.red ? "text-red-600" : ""}`}>
                             {row.currency ? formatCurrencyFull(value) : formatNum(value)}
                           </span>
@@ -1319,9 +1328,14 @@ export default function Home() {
                           <input
                             type="number"
                             value={funnelAfiliadosInputs[row.field!] ?? ""}
-                            onChange={(e) => handleFunnelAfiliadosChange(row.field! as keyof FunnelAfiliadosData, e.target.value)}
+                            onChange={(e) => {
+                              setFunnelAfiliadosInputs(prev => ({ ...prev, [row.field!]: e.target.value }));
+                              if (!isApiFieldEditable(row.field!)) {
+                                handleFunnelAfiliadosChange(row.field! as keyof FunnelAfiliadosData, e.target.value);
+                              }
+                            }}
                             placeholder="0"
-                            className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""}`}
+                            className={`w-full max-w-[100px] px-1 py-1 text-sm border border-[#E5E2DC] rounded text-center focus:outline-none focus:border-[#C75028] ${row.red ? "text-red-600" : ""} ${row.field && isApiFieldEditable(row.field) ? "border-amber-400 bg-amber-50" : ""}`}
                           />
                         )}
                       </td>
