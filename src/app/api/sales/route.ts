@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
     .from("orders")
     .select("lead_id, created_at, amount_cents, status, checkout_path")
     .eq("status", "paid")
-    .gte("amount_cents", 100000);
+    .gt("amount_cents", 5000);
   if (from) ordersQuery = ordersQuery.gte("created_at", `${from}T00:00:00`);
   if (to) ordersQuery = ordersQuery.lte("created_at", `${to}T23:59:59`);
 
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Filter to only leads that have a real paid order >= R$1000
+  // Filter to only leads that have a real paid order > R$50 (excludes consultation fees)
   const sales = leads
     ?.filter((l) => orderDateMap[l.id])
     .map((l) => ({
