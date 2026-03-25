@@ -34,14 +34,22 @@ const VERI_COLOR = "#C75028";
 const THAISA_COLOR = "#2563EB";
 
 export default function VendedorasPage() {
-  const [authed, setAuthed] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<KommoData | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showLost, setShowLost] = useState(false);
+
+  // Check auth first via /api/sales (lightweight, proven to work)
+  useEffect(() => {
+    fetch("/api/sales").then((r) => {
+      if (r.ok) { setAuthed(true); }
+      else { setAuthed(false); }
+    }).catch(() => setAuthed(false));
+  }, []);
 
   const fetchData = useCallback(async (from?: string, to?: string) => {
     setLoading(true);
@@ -56,14 +64,16 @@ export default function VendedorasPage() {
       const json = await res.json();
       if (json.error) { setError(json.error); setLoading(false); return; }
       setData(json);
-      setAuthed(true);
     } catch (e: any) {
       setError(e.message);
     }
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // Fetch Kommo data once authed
+  useEffect(() => {
+    if (authed) fetchData();
+  }, [authed, fetchData]);
 
   // Auto-refresh every 5 min
   useEffect(() => {
@@ -111,12 +121,20 @@ export default function VendedorasPage() {
     return data.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa }));
   }, [data]);
 
-  if (!authed && !loading) {
+  if (authed === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-sm text-[#9B9590]">Verificando autenticacao...</p>
+      </div>
+    );
+  }
+
+  if (authed === false) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
           <p className="text-lg font-bold mb-2">Nao autenticado</p>
-          <a href="/" className="text-[#C75028] underline text-sm">Voltar ao Dashboard</a>
+          <a href="/" className="text-[#C75028] underline text-sm">Voltar ao Dashboard e fazer login</a>
         </div>
       </div>
     );
@@ -165,7 +183,7 @@ export default function VendedorasPage() {
       </div>
 
       {/* Loading / Error */}
-      {loading && (
+      {(loading || (!data && !error)) && (
         <div className="bg-white border border-[#E5E2DC] rounded-lg p-10 text-center mb-6">
           <p className="text-sm text-[#9B9590]">Carregando dados do Kommo CRM...</p>
         </div>
