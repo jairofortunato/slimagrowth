@@ -26,11 +26,13 @@ interface Sale {
   sale_date: string;
   is_affiliate: boolean;
   referring_afiliado_id: string | null;
+  is_agendamento: boolean;
 }
 
 interface Aggregate {
   path: string;
   vendas: number;
+  agendamentos: number;
   afiliado: number;
   sem_atendimento: number;
 }
@@ -38,6 +40,7 @@ interface Aggregate {
 interface DailySale {
   date: string;
   vendas: number;
+  agendamentos: number;
   revenue: number;
 }
 
@@ -166,6 +169,7 @@ const PATH_LABELS: Record<string, string> = {
   affiliate_gift: "Presente Afiliado",
   pagarme_direct: "Pagarme Direto",
   agendamento: "Agendamento",
+  typebot: "Typebot",
   unknown: "Desconhecido",
 };
 
@@ -180,6 +184,7 @@ const PATH_COLORS: Record<string, string> = {
   affiliate_gift: "#EC4899",
   pagarme_direct: "#6366F1",
   agendamento: "#8B5CF6",
+  typebot: "#14B8A6",
   unknown: "#9CA3AF",
 };
 
@@ -290,6 +295,12 @@ export default function Home() {
   const [funnelAfiliadosInputs, setFunnelAfiliadosInputs] = useState<Record<string, string>>({});
   const [funnelMedicos, setFunnelMedicos] = useState<FunnelMedicosData>(EMPTY_FUNNEL_MEDICOS);
   const [funnelMedicosInputs, setFunnelMedicosInputs] = useState<Record<string, string>>({});
+  // Ads sub-channel data (Form vs Typebot)
+  const [adsSubLeads, setAdsSubLeads] = useState({ form: 0, typebot: 0 });
+  const [adsSubFunnel, setAdsSubFunnel] = useState({
+    form: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+    typebot: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+  });
 
   // Load saved settings from localStorage
   useEffect(() => {
@@ -402,6 +413,8 @@ export default function Home() {
     setDailySales(data.dailySales || []);
     setTotalRevenue(data.totalRevenue || 0);
     setChannelLeads(data.channelLeads || { ads: 0, afiliados: 0, medicos: 0 });
+    if (data.adsSubLeads) setAdsSubLeads(data.adsSubLeads);
+    if (data.adsSubFunnel) setAdsSubFunnel(data.adsSubFunnel);
     if (data.channelFunnel) setChannelFunnel(data.channelFunnel);
   }, []);
 
@@ -467,6 +480,8 @@ export default function Home() {
           setDailySales(data.dailySales || []);
           setTotalRevenue(data.totalRevenue || 0);
           setChannelLeads(data.channelLeads || { ads: 0, afiliados: 0, medicos: 0 });
+    if (data.adsSubLeads) setAdsSubLeads(data.adsSubLeads);
+    if (data.adsSubFunnel) setAdsSubFunnel(data.adsSubFunnel);
           if (data.channelFunnel) setChannelFunnel(data.channelFunnel);
         });
         fetchAdsMetrics();
@@ -513,12 +528,14 @@ export default function Home() {
   });
 
   const totalVendas = enrichedAggregate.reduce((s, a) => s + a.vendas, 0);
+  const totalAgendamentos = enrichedAggregate.reduce((s, a) => s + (a.agendamentos || 0), 0);
   const totalAfiliado = enrichedAggregate.reduce((s, a) => s + a.afiliado, 0);
   const totalSemAtendimento = enrichedAggregate.reduce((s, a) => s + a.sem_atendimento, 0);
-  const ticketMedio = totalVendas > 0 ? totalRevenue / totalVendas : 0;
+  const totalOrders = totalVendas + totalAgendamentos;
+  const ticketMedio = totalVendas > 0 ? totalRevenue / totalOrders : 0;
 
   const totalLeadsAll = Object.values(totalByPath).reduce((a, b) => a + b, 0);
-  const conversionRate = totalLeadsAll > 0 ? ((totalVendas / totalLeadsAll) * 100).toFixed(1) : "0";
+  const conversionRate = totalLeadsAll > 0 ? ((totalOrders / totalLeadsAll) * 100).toFixed(1) : "0";
 
   // Monthly sales data
   const monthlySalesData = useMemo(() => {
@@ -606,6 +623,36 @@ export default function Home() {
     };
   }, [sales, channelFunnel]);
 
+  // Ads sub-channel auto data (Form vs Typebot)
+  const adsSubAutoData = useMemo(() => {
+    const formSales = sales.filter(s => !s.is_affiliate && s.checkout_path !== "prescription_checkout" && s.checkout_path !== "typebot" && s.checkout_path !== "agendamento");
+    const typebotSales = sales.filter(s => s.checkout_path === "typebot" || s.checkout_path === "agendamento");
+    return {
+      form: {
+        leads: adsSubLeads.form,
+        leadsCompleto: adsSubFunnel.form.leadsCompleto,
+        formAprovados: adsSubFunnel.form.formAprovados,
+        formRejeitados: adsSubFunnel.form.formRejeitados,
+        consultasAgendadas: adsSubFunnel.form.consultasAgendadas,
+        consultasFeitas: adsSubFunnel.form.consultasFeitas,
+        agendamentos: formSales.filter(s => s.is_agendamento).length,
+        vendas: formSales.filter(s => !s.is_agendamento).length,
+        faturamento: formSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
+      },
+      typebot: {
+        leads: adsSubLeads.typebot,
+        leadsCompleto: adsSubFunnel.typebot.leadsCompleto,
+        formAprovados: adsSubFunnel.typebot.formAprovados,
+        formRejeitados: adsSubFunnel.typebot.formRejeitados,
+        consultasAgendadas: adsSubFunnel.typebot.consultasAgendadas,
+        consultasFeitas: adsSubFunnel.typebot.consultasFeitas,
+        agendamentos: typebotSales.filter(s => s.is_agendamento).length,
+        vendas: typebotSales.filter(s => !s.is_agendamento).length,
+        faturamento: typebotSales.reduce((sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0), 0),
+      },
+    };
+  }, [sales, adsSubLeads, adsSubFunnel]);
+
   // Helper: check if a field should be editable due to API error
   const isApiFieldEditable = (field: string): boolean => {
     if (metaError && (field === "gastoMeta" || field === "cliquesMeta")) return true;
@@ -684,7 +731,10 @@ export default function Home() {
           <p className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-1">SLIMA GROWTH</p>
           <h1 className="text-3xl font-bold">Dashboard</h1>
         </div>
-        <p className="text-xs text-[#9B9590]">Atualiza a cada 30s</p>
+        <div className="flex items-center gap-4">
+          <a href="/vendedoras" className="px-3 py-1.5 text-xs font-medium bg-[#1A1A1A] text-white rounded-lg hover:bg-[#333] transition-colors">Vendedoras</a>
+          <p className="text-xs text-[#9B9590]">Atualiza a cada 30s</p>
+        </div>
       </div>
 
       {/* Date Filter */}
@@ -806,10 +856,14 @@ export default function Home() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
         <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Total Vendas</p>
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Vendas (≥R$100)</p>
           <p className="text-3xl font-bold">{totalVendas}</p>
+        </div>
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Agendamentos (&lt;R$100)</p>
+          <p className="text-3xl font-bold text-[#14B8A6]">{totalAgendamentos}</p>
         </div>
         <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
           <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Valor Total</p>
@@ -822,7 +876,7 @@ export default function Home() {
         <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
           <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Conversao Geral</p>
           <p className="text-3xl font-bold">{conversionRate}%</p>
-          <p className="text-xs text-[#9B9590] mt-1">{totalVendas} de {totalLeadsAll} leads</p>
+          <p className="text-xs text-[#9B9590] mt-1">{totalOrders} de {totalLeadsAll} leads</p>
         </div>
       </div>
 
@@ -1163,7 +1217,7 @@ export default function Home() {
       )}
 
       {/* Funnels Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-10">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
 
         {/* ── CANAL ADS ── */}
         <div className="rounded-lg overflow-hidden border border-[#E5E2DC] flex flex-col">
@@ -1457,6 +1511,91 @@ export default function Home() {
 
       </div>
 
+      {/* Ads Sub-Channels: Form vs Typebot */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+        {/* ── SUB-CANAL FORM ── */}
+        <div className="rounded-lg overflow-hidden border border-[#2563EB]">
+          <div className="bg-[#2563EB] text-white px-4 py-3 flex items-center justify-between">
+            <h3 className="text-sm font-bold tracking-wide">FORM (Ads)</h3>
+            <span className="text-xs opacity-80">{formatNum(adsSubAutoData.form.leads)} leads</span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#EFF6FF] border-b border-[#DBEAFE]">
+                <th className="text-left px-3 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Metrica</th>
+                <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Qtd</th>
+                <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Conv.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: "Leads", value: adsSubAutoData.form.leads, base: true },
+                { label: "Leads Completo", value: adsSubAutoData.form.leadsCompleto, prev: adsSubAutoData.form.leads },
+                { label: "Form. Aprovados", value: adsSubAutoData.form.formAprovados, prev: adsSubAutoData.form.leadsCompleto },
+                { label: "Form. Rejeitados", value: adsSubAutoData.form.formRejeitados, prev: adsSubAutoData.form.leadsCompleto, red: true },
+                { label: "Consultas Agendadas", value: adsSubAutoData.form.consultasAgendadas, prev: adsSubAutoData.form.formAprovados },
+                { label: "Consultas Feitas", value: adsSubAutoData.form.consultasFeitas, prev: adsSubAutoData.form.consultasAgendadas },
+                { label: "Agendamentos (<R$100)", value: adsSubAutoData.form.agendamentos, prev: adsSubAutoData.form.formAprovados, bold: true },
+                { label: "Vendas (≥R$100)", value: adsSubAutoData.form.vendas, prev: adsSubAutoData.form.formAprovados, bold: true },
+              ].map((row, idx) => (
+                <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
+                  <td className={`px-3 py-1.5 text-xs ${row.bold ? "font-bold" : ""}`}>{row.label}</td>
+                  <td className={`px-2 py-1.5 text-center text-xs font-semibold ${row.red ? "text-red-600" : ""}`}>{formatNum(row.value)}</td>
+                  <td className={`px-2 py-1.5 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>
+                    {row.base ? "\u2014" : row.prev && row.prev > 0 ? formatPct((row.value / row.prev) * 100) : "\u2014"}
+                  </td>
+                </tr>
+              ))}
+              <tr className="bg-[#EFF6FF] font-semibold">
+                <td className="px-3 py-1.5 text-xs">Faturamento</td>
+                <td className="px-2 py-1.5 text-center text-xs" colSpan={2}>{formatCurrencyFull(adsSubAutoData.form.faturamento)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── SUB-CANAL TYPEBOT ── */}
+        <div className="rounded-lg overflow-hidden border border-[#14B8A6]">
+          <div className="bg-[#14B8A6] text-white px-4 py-3 flex items-center justify-between">
+            <h3 className="text-sm font-bold tracking-wide">TYPEBOT (Ads)</h3>
+            <span className="text-xs opacity-80">{formatNum(adsSubAutoData.typebot.leads)} leads</span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#F0FDFA] border-b border-[#CCFBF1]">
+                <th className="text-left px-3 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Metrica</th>
+                <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Qtd</th>
+                <th className="text-center px-2 py-2 font-medium text-[10px] uppercase tracking-wide text-[#6B6560]">Conv.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: "Leads", value: adsSubAutoData.typebot.leads, base: true },
+                { label: "Leads Completo", value: adsSubAutoData.typebot.leadsCompleto, prev: adsSubAutoData.typebot.leads },
+                { label: "Form. Aprovados", value: adsSubAutoData.typebot.formAprovados, prev: adsSubAutoData.typebot.leadsCompleto },
+                { label: "Form. Rejeitados", value: adsSubAutoData.typebot.formRejeitados, prev: adsSubAutoData.typebot.leadsCompleto, red: true },
+                { label: "Consultas Agendadas", value: adsSubAutoData.typebot.consultasAgendadas, prev: adsSubAutoData.typebot.formAprovados },
+                { label: "Consultas Feitas", value: adsSubAutoData.typebot.consultasFeitas, prev: adsSubAutoData.typebot.consultasAgendadas },
+                { label: "Agendamentos (<R$100)", value: adsSubAutoData.typebot.agendamentos, prev: adsSubAutoData.typebot.formAprovados, bold: true },
+                { label: "Vendas (≥R$100)", value: adsSubAutoData.typebot.vendas, prev: adsSubAutoData.typebot.formAprovados, bold: true },
+              ].map((row, idx) => (
+                <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
+                  <td className={`px-3 py-1.5 text-xs ${row.bold ? "font-bold" : ""}`}>{row.label}</td>
+                  <td className={`px-2 py-1.5 text-center text-xs font-semibold ${row.red ? "text-red-600" : ""}`}>{formatNum(row.value)}</td>
+                  <td className={`px-2 py-1.5 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>
+                    {row.base ? "\u2014" : row.prev && row.prev > 0 ? formatPct((row.value / row.prev) * 100) : "\u2014"}
+                  </td>
+                </tr>
+              ))}
+              <tr className="bg-[#F0FDFA] font-semibold">
+                <td className="px-3 py-1.5 text-xs">Faturamento</td>
+                <td className="px-2 py-1.5 text-center text-xs" colSpan={2}>{formatCurrencyFull(adsSubAutoData.typebot.faturamento)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Aggregate Table */}
       <div className="mb-10">
         <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-3">AGREGADO POR CAMINHO</h2>
@@ -1466,6 +1605,7 @@ export default function Home() {
               <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
                 <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Caminho</th>
                 <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Vendas</th>
+                <th className="text-center px-4 py-2.5 font-medium text-[#14B8A6]">Agend.</th>
                 <th className="text-right px-4 py-2.5 font-medium text-[#6B6560]">Receita</th>
                 <th className="text-right px-4 py-2.5 font-medium text-[#6B6560]">Ticket Medio</th>
                 <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Total Leads</th>
@@ -1478,7 +1618,8 @@ export default function Home() {
             <tbody>
               {enrichedAggregate.map((a) => {
                 const revenue = revenueByPath[a.path] || 0;
-                const ticket = a.vendas > 0 ? revenue / a.vendas : 0;
+                const totalPath = a.vendas + (a.agendamentos || 0);
+                const ticket = totalPath > 0 ? revenue / totalPath : 0;
                 return (
                   <tr key={a.path} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
                     <td className="px-4 py-2.5 font-medium">
@@ -1491,12 +1632,13 @@ export default function Home() {
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-center font-semibold">{a.vendas}</td>
+                    <td className="px-4 py-2.5 text-center font-semibold text-[#14B8A6]">{a.agendamentos || 0}</td>
                     <td className="px-4 py-2.5 text-right font-medium">{formatCurrencyNum(revenue)}</td>
                     <td className="px-4 py-2.5 text-right text-[#6B6560]">{formatCurrencyNum(ticket)}</td>
                     <td className="px-4 py-2.5 text-center text-[#6B6560]">{totalByPath[a.path] || "\u2014"}</td>
                     <td className="px-4 py-2.5 text-center text-[#6B6560]">
                       {totalByPath[a.path]
-                        ? `${((a.vendas / totalByPath[a.path]) * 100).toFixed(1)}%`
+                        ? `${((totalPath / totalByPath[a.path]) * 100).toFixed(1)}%`
                         : "\u2014"}
                     </td>
                     <td className="px-4 py-2.5 text-center">{a.afiliado || ""}</td>
@@ -1508,6 +1650,7 @@ export default function Home() {
               <tr className="bg-[#F9F8F6] font-semibold">
                 <td className="px-4 py-2.5">Total</td>
                 <td className="px-4 py-2.5 text-center">{totalVendas}</td>
+                <td className="px-4 py-2.5 text-center text-[#14B8A6]">{totalAgendamentos}</td>
                 <td className="px-4 py-2.5 text-right">{formatCurrencyNum(totalRevenue)}</td>
                 <td className="px-4 py-2.5 text-right">{formatCurrencyNum(ticketMedio)}</td>
                 <td className="px-4 py-2.5 text-center"></td>
@@ -1532,6 +1675,7 @@ export default function Home() {
                 <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Data</th>
                 <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Caminho</th>
                 <th className="text-right px-4 py-2.5 font-medium text-[#6B6560]">Valor</th>
+                <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Tipo</th>
                 <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Afiliado</th>
                 <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Sem Atendimento</th>
               </tr>
@@ -1557,6 +1701,13 @@ export default function Home() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-right font-medium">{formatCurrency(s.order_value)}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    {s.is_agendamento ? (
+                      <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded bg-[#F0FDFA] text-[#14B8A6]">Agend.</span>
+                    ) : (
+                      <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded bg-[#F0FDF4] text-[#059669]">Venda</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-center">
                     {s.is_affiliate ? "x" : ""}
                   </td>

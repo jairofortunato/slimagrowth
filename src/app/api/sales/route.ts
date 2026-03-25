@@ -12,6 +12,7 @@ const HUMAN_SALE_PATHS = [
   "chat_web",
   "chat_whatsapp",
   "whatsapp_flow",
+  "typebot",
 ];
 
 export async function GET(req: NextRequest) {
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Fetch paid orders to get actual sale dates
+  // Fetch paid orders > R$50 (excludes basic consultation fees)
   let ordersQuery = supabase
     .from("orders")
     .select("lead_id, created_at, amount_cents, status, checkout_path")
@@ -51,15 +52,22 @@ export async function GET(req: NextRequest) {
 
   const { data: orders } = await ordersQuery;
 
-  // Build a map of lead_id -> earliest paid order date
+  // Build maps: lead_id -> earliest paid order date & max order amount
   const orderDateMap: Record<string, string> = {};
+  const leadMaxOrder: Record<string, number> = {};
   for (const o of orders || []) {
-    if (o.lead_id && (!orderDateMap[o.lead_id] || o.created_at < orderDateMap[o.lead_id])) {
+    if (!o.lead_id) continue;
+    if (!orderDateMap[o.lead_id] || o.created_at < orderDateMap[o.lead_id]) {
       orderDateMap[o.lead_id] = o.created_at;
+    }
+    if (!leadMaxOrder[o.lead_id] || o.amount_cents > leadMaxOrder[o.lead_id]) {
+      leadMaxOrder[o.lead_id] = o.amount_cents;
     }
   }
 
-  // Filter to only leads that have a real paid order > R$50 (excludes consultation fees)
+  // Build sales list with agendamento classification
+  // Agendamento: max order < R$100 (10000 cents) — scheduling fee
+  // Venda: max order >= R$100 — actual product sale
   const sales = leads
     ?.filter((l) => orderDateMap[l.id])
     .map((l) => ({
@@ -70,20 +78,25 @@ export async function GET(req: NextRequest) {
       sale_date: orderDateMap[l.id],
       is_affiliate: !!l.referring_afiliado_id && l.checkout_path !== "prescription_checkout",
       referring_afiliado_id: l.referring_afiliado_id,
+      is_agendamento: (leadMaxOrder[l.id] || 0) < 10000,
     }));
 
-  // Aggregate by checkout_path
-  const aggMap: Record<string, { vendas: number; afiliado: number; sem_atendimento: number }> = {};
+  // Aggregate by checkout_path (separate vendas from agendamentos)
+  const aggMap: Record<string, { vendas: number; agendamentos: number; afiliado: number; sem_atendimento: number }> = {};
   for (const s of sales || []) {
     const path = s.checkout_path;
-    if (!aggMap[path]) aggMap[path] = { vendas: 0, afiliado: 0, sem_atendimento: 0 };
-    aggMap[path].vendas++;
+    if (!aggMap[path]) aggMap[path] = { vendas: 0, agendamentos: 0, afiliado: 0, sem_atendimento: 0 };
+    if (s.is_agendamento) {
+      aggMap[path].agendamentos++;
+    } else {
+      aggMap[path].vendas++;
+    }
     if (s.is_affiliate) aggMap[path].afiliado++;
   }
 
   const aggregate = Object.entries(aggMap)
     .map(([path, data]) => ({ path, ...data }))
-    .sort((a, b) => b.vendas - a.vendas);
+    .sort((a, b) => (b.vendas + b.agendamentos) - (a.vendas + a.agendamentos));
 
   // Total leads by checkout_path (for conversion rates + funnel metrics)
   let allLeadsQuery = supabase
@@ -105,13 +118,22 @@ export async function GET(req: NextRequest) {
   const { data: consultations } = await consultQuery;
 
   // Build user_id -> channel map from leads
-  const userChannelMap: Record<string, string> = {};
+  // typebot/agendamento checkout_paths stay in "ads" channel
+  type Channel = "ads" | "afiliados" | "medicos";
+  type AdsSubChannel = "form" | "typebot";
+  const userChannelMap: Record<string, Channel> = {};
+  const userSubChannelMap: Record<string, AdsSubChannel> = {};
   for (const l of allLeads || []) {
     if (!l.user_id) continue;
     const p = l.checkout_path || "unknown";
-    if (p === "prescription_checkout") userChannelMap[l.user_id] = "medicos";
-    else if (l.referring_afiliado_id) userChannelMap[l.user_id] = "afiliados";
-    else userChannelMap[l.user_id] = "ads";
+    if (p === "prescription_checkout") {
+      userChannelMap[l.user_id] = "medicos";
+    } else if (l.referring_afiliado_id) {
+      userChannelMap[l.user_id] = "afiliados";
+    } else {
+      userChannelMap[l.user_id] = "ads";
+      userSubChannelMap[l.user_id] = (p === "typebot" || p === "agendamento") ? "typebot" : "form";
+    }
   }
 
   const totalByPath: Record<string, number> = {};
@@ -122,10 +144,17 @@ export async function GET(req: NextRequest) {
     medicos: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
   };
 
+  // Sub-channel tracking within Ads: Form vs Typebot
+  const adsSubLeads = { form: 0, typebot: 0 };
+  const adsSubFunnel = {
+    form: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+    typebot: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
+  };
+
   for (const l of allLeads || []) {
     const p = l.checkout_path || "unknown";
     totalByPath[p] = (totalByPath[p] || 0) + 1;
-    let ch: "ads" | "afiliados" | "medicos";
+    let ch: Channel;
     if (p === "prescription_checkout") ch = "medicos";
     else if (l.referring_afiliado_id) ch = "afiliados";
     else ch = "ads";
@@ -135,18 +164,35 @@ export async function GET(req: NextRequest) {
     // null revalife_status counts as approved
     if (l.revalife_status === "APPROVED" || !l.revalife_status) channelFunnel[ch].formAprovados++;
     if (l.revalife_status === "REJECTED") channelFunnel[ch].formRejeitados++;
+
+    // Track ads sub-channel
+    if (ch === "ads") {
+      const subCh: AdsSubChannel = (p === "typebot" || p === "agendamento") ? "typebot" : "form";
+      adsSubLeads[subCh]++;
+      if (l.revalife_status !== "IN_PROGRESS") adsSubFunnel[subCh].leadsCompleto++;
+      if (l.revalife_status === "APPROVED" || !l.revalife_status) adsSubFunnel[subCh].formAprovados++;
+      if (l.revalife_status === "REJECTED") adsSubFunnel[subCh].formRejeitados++;
+    }
   }
 
-  // Count consultations by channel
+  // Count consultations by channel and sub-channel
   for (const c of consultations || []) {
     if (!c.user_id) continue;
-    const ch = userChannelMap[c.user_id] as "ads" | "afiliados" | "medicos" | undefined;
+    const ch = userChannelMap[c.user_id];
     if (!ch) continue;
     if (["scheduled", "done", "rescheduled", "no_show"].includes(c.status)) {
       channelFunnel[ch].consultasAgendadas++;
+      if (ch === "ads") {
+        const subCh = userSubChannelMap[c.user_id] || "form";
+        adsSubFunnel[subCh].consultasAgendadas++;
+      }
     }
     if (c.status === "done") {
       channelFunnel[ch].consultasFeitas++;
+      if (ch === "ads") {
+        const subCh = userSubChannelMap[c.user_id] || "form";
+        adsSubFunnel[subCh].consultasFeitas++;
+      }
     }
   }
 
@@ -157,12 +203,16 @@ export async function GET(req: NextRequest) {
     revenueByPath[s.checkout_path] = (revenueByPath[s.checkout_path] || 0) + val;
   }
 
-  // Daily sales (last 30 days)
-  const dailySales: Record<string, { vendas: number; revenue: number }> = {};
+  // Daily sales
+  const dailySales: Record<string, { vendas: number; agendamentos: number; revenue: number }> = {};
   for (const s of sales || []) {
     const day = s.sale_date.slice(0, 10); // YYYY-MM-DD
-    if (!dailySales[day]) dailySales[day] = { vendas: 0, revenue: 0 };
-    dailySales[day].vendas++;
+    if (!dailySales[day]) dailySales[day] = { vendas: 0, agendamentos: 0, revenue: 0 };
+    if (s.is_agendamento) {
+      dailySales[day].agendamentos++;
+    } else {
+      dailySales[day].vendas++;
+    }
     dailySales[day].revenue += s.order_value ? parseFloat(s.order_value) : 0;
   }
 
@@ -170,7 +220,7 @@ export async function GET(req: NextRequest) {
     .map(([date, data]) => ({ date, ...data }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // Total revenue
+  // Total revenue (all orders — vendas + agendamentos)
   const totalRevenue = (sales || []).reduce(
     (sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0),
     0
@@ -185,5 +235,7 @@ export async function GET(req: NextRequest) {
     totalRevenue,
     channelLeads,
     channelFunnel,
+    adsSubLeads,
+    adsSubFunnel,
   });
 }
