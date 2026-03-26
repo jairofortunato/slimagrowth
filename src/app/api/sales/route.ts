@@ -26,14 +26,12 @@ export async function GET(req: NextRequest) {
   const from = searchParams.get("from"); // YYYY-MM-DD
   const to = searchParams.get("to"); // YYYY-MM-DD
 
-  // Fetch paid leads with their orders
-  let leadsQuery = supabase
+  // Fetch ALL paid leads (no date filter here — date filtering is done via orders)
+  const leadsQuery = supabase
     .from("leads")
     .select("id, name, phone, checkout_path, payment_status, order_value, referring_afiliado_id, created_at")
     .eq("payment_status", "paid")
     .order("created_at", { ascending: false });
-  if (from) leadsQuery = leadsQuery.gte("created_at", `${from}T00:00:00`);
-  if (to) leadsQuery = leadsQuery.lte("created_at", `${to}T23:59:59`);
 
   const { data: leads, error } = await leadsQuery;
 
