@@ -203,8 +203,10 @@ export async function GET(req: NextRequest) {
       const cid = l._embedded?.contacts?.[0]?.id;
       const c = cid ? contactMap[cid] : null;
       return {
+        kommoId: l.id,
         name: c?.name || l.name || "\u2014",
         phone: c?.phone || "\u2014",
+        price: l.price || 0,
         createdAt: toDate(l.created_at),
         closedAt: l.closed_at ? toDate(l.closed_at) : "\u2014",
         vendedora: l.responsible_user_id === VERI ? "Veridiana"

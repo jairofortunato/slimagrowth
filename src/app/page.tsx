@@ -732,6 +732,7 @@ export default function Home() {
           <h1 className="text-3xl font-bold">Dashboard</h1>
         </div>
         <div className="flex items-center gap-4">
+          <a href="/resumo" className="px-3 py-1.5 text-xs font-medium bg-[#C75028] text-white rounded-lg hover:bg-[#A8421F] transition-colors">Resumo do Mes</a>
           <a href="/vendedoras" className="px-3 py-1.5 text-xs font-medium bg-[#1A1A1A] text-white rounded-lg hover:bg-[#333] transition-colors">Vendedoras</a>
           <p className="text-xs text-[#9B9590]">Atualiza a cada 30s</p>
         </div>

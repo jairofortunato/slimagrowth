@@ -71,6 +71,7 @@ export async function GET(req: NextRequest) {
     .map((l) => ({
       id: l.id,
       name: l.name,
+      phone: l.phone || "",
       checkout_path: l.checkout_path || "unknown",
       order_value: l.order_value,
       sale_date: orderDateMap[l.id],
