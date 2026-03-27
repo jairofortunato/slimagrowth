@@ -142,10 +142,18 @@ export default function ResumoPage() {
     form: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
     typebot: { leadsCompleto: 0, formAprovados: 0, formRejeitados: 0, consultasAgendadas: 0, consultasFeitas: 0 },
   });
+  const [affiliateMap, setAffiliateMap] = useState<Record<string, { name: string; referral_code: string; commission_fixed_value: number | null; commission_percentage: number }>>({});
 
   // Kommo data
   const [kommo, setKommo] = useState<KommoData | null>(null);
   const [kommoError, setKommoError] = useState("");
+
+  // Consultas vs Compras data
+  const [consultasSummary, setConsultasSummary] = useState<{
+    totalCompras: number; faturamento: number; pctConsultaPos: number;
+    pctRecompra: number; taxaConversao: number; ticketMedio: number;
+    preConsultBuyers: number; consultOnly: number;
+  } | null>(null);
 
   // ── Fetch sales data ─────────────────────────────────────────────────────────
   const fetchSales = useCallback(async () => {
@@ -162,6 +170,7 @@ export default function ResumoPage() {
       if (data.channelFunnel) setChannelFunnel(data.channelFunnel);
       if (data.adsSubLeads) setAdsSubLeads(data.adsSubLeads);
       if (data.adsSubFunnel) setAdsSubFunnel(data.adsSubFunnel);
+      if (data.affiliateMap) setAffiliateMap(data.affiliateMap);
     } catch (e: unknown) {
       setError((e as Error).message);
     }
@@ -182,6 +191,19 @@ export default function ResumoPage() {
     }
   }, []);
 
+  // ── Fetch Consultas vs Compras ─────────────────────────────────────────────
+  const fetchConsultas = useCallback(async () => {
+    const { from, to } = getCurrentMonthRange();
+    const params = new URLSearchParams({ from, to });
+    try {
+      const res = await fetch(`/api/consultas-compras?${params}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.summary) setConsultasSummary(json.summary);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   // ── Auth check + initial fetch ───────────────────────────────────────────────
   useEffect(() => {
     setLoading(true);
@@ -190,6 +212,7 @@ export default function ResumoPage() {
         setAuthed(true);
         fetchSales();
         fetchKommo();
+        fetchConsultas();
       } else {
         setAuthed(false);
       }
@@ -281,6 +304,27 @@ export default function ResumoPage() {
     }
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
   }, [sales]);
+
+  // Affiliate sales grouped by affiliate
+  const affiliateSalesData = useMemo(() => {
+    const afSales = sales.filter(s => s.is_affiliate && s.referring_afiliado_id);
+    const grouped: Record<string, { afiliado: { id: string; name: string; code: string; commission: string }; clients: Sale[] }> = {};
+    for (const s of afSales) {
+      const aid = s.referring_afiliado_id!;
+      if (!grouped[aid]) {
+        const af = affiliateMap[aid];
+        const commLabel = af
+          ? (af.commission_percentage > 0 ? `${af.commission_percentage}%` : af.commission_fixed_value ? `R$${af.commission_fixed_value}` : "\u2014")
+          : "\u2014";
+        grouped[aid] = {
+          afiliado: { id: aid, name: af?.name || aid.slice(0, 8), code: af?.referral_code || "\u2014", commission: commLabel },
+          clients: [],
+        };
+      }
+      grouped[aid].clients.push(s);
+    }
+    return Object.values(grouped).sort((a, b) => b.clients.length - a.clients.length);
+  }, [sales, affiliateMap]);
 
   // Pie data: channel distribution
   const channelPie = useMemo(() => {
@@ -483,6 +527,7 @@ export default function ResumoPage() {
         <div className="flex items-center gap-3">
           <a href="/" className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors">Dashboard</a>
           <a href="/vendedoras" className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors">Vendedoras</a>
+          <a href="/consultas" className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors">Consultas</a>
         </div>
       </div>
 
@@ -523,6 +568,33 @@ export default function ResumoPage() {
           </div>
         )}
       </div>
+
+      {/* ═══ Consultas vs Compras KPIs ═══ */}
+      {consultasSummary && (
+        <>
+          <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">CONSULTAS VS COMPRAS</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Consulta Pos-Compra</p>
+              <p className="text-3xl font-bold">{fmtPct(consultasSummary.pctConsultaPos)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Recompra</p>
+              <p className="text-3xl font-bold">{fmtPct(consultasSummary.pctRecompra)}</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Conv. Pos-Consulta</p>
+              <p className="text-3xl font-bold text-[#C75028]">{fmtPct(consultasSummary.taxaConversao)}</p>
+              <p className="text-xs text-[#9B9590] mt-1">{consultasSummary.preConsultBuyers} conv / {consultasSummary.preConsultBuyers + consultasSummary.consultOnly} consultas</p>
+            </div>
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+              <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">So Consultaram</p>
+              <p className="text-3xl font-bold text-[#9B9590]">{consultasSummary.consultOnly}</p>
+              <p className="text-xs text-[#9B9590] mt-1">sem compra no periodo</p>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       {/* SECTION 2: CANAIS — ADS vs AFILIADOS                                  */}
@@ -684,6 +756,73 @@ export default function ResumoPage() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 2B: VENDAS POR AFILIADO                                       */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {affiliateSalesData.length > 0 && (
+        <>
+          <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDAS POR AFILIADO</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+            {affiliateSalesData.map(({ afiliado, clients }) => {
+              const totalVal = clients.reduce((s, c) => s + (c.order_value ? parseFloat(c.order_value) : 0), 0);
+              const vendas = clients.filter(c => !c.is_agendamento).length;
+              const agendamentos = clients.filter(c => c.is_agendamento).length;
+              return (
+                <div key={afiliado.id} className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+                  {/* Affiliate header */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-sm font-bold">{afiliado.name}</h3>
+                      <p className="text-[10px] text-[#9B9590]">@{afiliado.code}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium rounded bg-[#05966915] text-[#059669]">
+                        comissao: {afiliado.commission}
+                      </span>
+                    </div>
+                  </div>
+                  {/* KPIs */}
+                  <div className="grid grid-cols-3 gap-2 mb-3 pb-3 border-b border-[#F0EDEA]">
+                    <div className="text-center">
+                      <p className="text-[10px] text-[#9B9590] uppercase">Vendas</p>
+                      <p className="text-lg font-bold">{vendas}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-[10px] text-[#9B9590] uppercase">Agend.</p>
+                      <p className="text-lg font-bold text-[#14B8A6]">{agendamentos}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-[10px] text-[#9B9590] uppercase">Faturamento</p>
+                      <p className="text-lg font-bold">{fmtCurrency(totalVal)}</p>
+                    </div>
+                  </div>
+                  {/* Client list */}
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {clients.map((c, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs py-1 px-2 rounded hover:bg-[#F9F8F6]">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{c.name}</p>
+                          <p className="text-[10px] text-[#9B9590]">{c.phone || "\u2014"} &middot; {fmtShort(c.sale_date.slice(0, 10))}</p>
+                        </div>
+                        <div className="text-right ml-2 flex-shrink-0">
+                          <p className="font-medium">{c.order_value ? fmtCurrency(parseFloat(c.order_value)) : "\u2014"}</p>
+                          <p className="text-[10px]">
+                            {c.is_agendamento
+                              ? <span className="text-[#14B8A6]">agend.</span>
+                              : <span className="text-[#1A1A1A]">venda</span>
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}

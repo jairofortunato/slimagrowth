@@ -225,6 +225,24 @@ export async function GET(req: NextRequest) {
     0
   );
 
+  // Resolve affiliate names from afiliados table
+  const affiliateIds = [...new Set((sales || []).filter(s => s.referring_afiliado_id).map(s => s.referring_afiliado_id!))];
+  const affiliateMap: Record<string, { name: string; referral_code: string; commission_fixed_value: number | null; commission_percentage: number }> = {};
+  if (affiliateIds.length > 0) {
+    const { data: afiliados } = await supabase
+      .from("afiliados")
+      .select("id, name, referral_code, commission_fixed_value, commission_percentage")
+      .in("id", affiliateIds);
+    for (const a of afiliados || []) {
+      affiliateMap[a.id] = {
+        name: a.name,
+        referral_code: a.referral_code,
+        commission_fixed_value: a.commission_fixed_value,
+        commission_percentage: a.commission_percentage,
+      };
+    }
+  }
+
   return NextResponse.json({
     sales,
     aggregate,
@@ -236,5 +254,6 @@ export async function GET(req: NextRequest) {
     channelFunnel,
     adsSubLeads,
     adsSubFunnel,
+    affiliateMap,
   });
 }
