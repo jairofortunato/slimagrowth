@@ -27,6 +27,7 @@ interface Sale {
   is_affiliate: boolean;
   referring_afiliado_id: string | null;
   is_agendamento: boolean;
+  vendedor: string | null;
 }
 
 interface Aggregate {
@@ -235,6 +236,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [sales, setSales] = useState<Sale[]>([]);
+  const [salesSort, setSalesSort] = useState<{ col: string; desc: boolean }>({ col: "sale_date", desc: true });
   const [aggregate, setAggregate] = useState<Aggregate[]>([]);
   const [totalByPath, setTotalByPath] = useState<Record<string, number>>({});
   const [revenueByPath, setRevenueByPath] = useState<Record<string, number>>({});
@@ -536,6 +538,32 @@ export default function Home() {
 
   const totalLeadsAll = Object.values(totalByPath).reduce((a, b) => a + b, 0);
   const conversionRate = totalLeadsAll > 0 ? ((totalOrders / totalLeadsAll) * 100).toFixed(1) : "0";
+
+  // Sorted sales for table
+  const sortedSales = useMemo(() => {
+    const { col, desc } = salesSort;
+    return [...sales].sort((a, b) => {
+      let va: string | number | boolean = "";
+      let vb: string | number | boolean = "";
+      switch (col) {
+        case "name": va = (a.name || "").toLowerCase(); vb = (b.name || "").toLowerCase(); break;
+        case "sale_date": va = a.sale_date; vb = b.sale_date; break;
+        case "checkout_path": va = PATH_LABELS[a.checkout_path] || a.checkout_path; vb = PATH_LABELS[b.checkout_path] || b.checkout_path; break;
+        case "order_value": va = parseFloat(a.order_value || "0"); vb = parseFloat(b.order_value || "0"); break;
+        case "tipo": va = a.is_agendamento ? 0 : 1; vb = b.is_agendamento ? 0 : 1; break;
+        case "vendedor": va = (a.vendedor || "zzz").toLowerCase(); vb = (b.vendedor || "zzz").toLowerCase(); break;
+        case "afiliado": va = a.is_affiliate ? 1 : 0; vb = b.is_affiliate ? 1 : 0; break;
+        case "sem_atendimento": va = SEM_ATENDIMENTO[a.name] ? 1 : 0; vb = SEM_ATENDIMENTO[b.name] ? 1 : 0; break;
+      }
+      if (va < vb) return desc ? 1 : -1;
+      if (va > vb) return desc ? -1 : 1;
+      return 0;
+    });
+  }, [sales, salesSort]);
+
+  const toggleSalesSort = (col: string) => {
+    setSalesSort((prev) => prev.col === col ? { col, desc: !prev.desc } : { col, desc: true });
+  };
 
   // Monthly sales data
   const monthlySalesData = useMemo(() => {
@@ -1672,17 +1700,29 @@ export default function Home() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
-                <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Nome</th>
-                <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Data</th>
-                <th className="text-left px-4 py-2.5 font-medium text-[#6B6560]">Caminho</th>
-                <th className="text-right px-4 py-2.5 font-medium text-[#6B6560]">Valor</th>
-                <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Tipo</th>
-                <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Afiliado</th>
-                <th className="text-center px-4 py-2.5 font-medium text-[#6B6560]">Sem Atendimento</th>
+                {([
+                  ["name", "Nome", "text-left"],
+                  ["sale_date", "Data", "text-left"],
+                  ["checkout_path", "Caminho", "text-left"],
+                  ["order_value", "Valor", "text-right"],
+                  ["tipo", "Tipo", "text-center"],
+                  ["vendedor", "Vendedor", "text-left"],
+                  ["afiliado", "Afiliado", "text-center"],
+                  ["sem_atendimento", "Sem Atendimento", "text-center"],
+                ] as const).map(([key, label, align]) => (
+                  <th
+                    key={key}
+                    className={`${align} px-4 py-2.5 font-medium text-[#6B6560] cursor-pointer select-none hover:text-[#C75028]`}
+                    onClick={() => toggleSalesSort(key)}
+                  >
+                    {label}
+                    {salesSort.col === key ? (salesSort.desc ? " \u25BC" : " \u25B2") : ""}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {sales.map((s, i) => (
+              {sortedSales.map((s, i) => (
                 <tr key={`${s.id}-${i}`} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
                   <td className="px-4 py-2.5 font-medium">{s.name || "\u2014"}</td>
                   <td className="px-4 py-2.5 text-[#6B6560]">{formatDate(s.sale_date)}</td>
@@ -1709,6 +1749,7 @@ export default function Home() {
                       <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded bg-[#F0FDF4] text-[#059669]">Venda</span>
                     )}
                   </td>
+                  <td className="px-4 py-2.5 text-[#6B6560]">{s.vendedor || "\u2014"}</td>
                   <td className="px-4 py-2.5 text-center">
                     {s.is_affiliate ? "x" : ""}
                   </td>

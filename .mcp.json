@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kommo": {
+      "command": "node",
+      "args": ["mcp-servers/kommo.mjs"],
+      "env": {}
+    }
+  }
+}

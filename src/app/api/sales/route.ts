@@ -3,6 +3,69 @@ import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
+const KOMMO_BASE = `https://${process.env.KOMMO_SUBDOMAIN}.kommo.com`;
+const KOMMO_TOKEN = process.env.KOMMO_LONG_LIVED_TOKEN;
+const KOMMO_USERS: Record<number, string> = {
+  14597455: "Veridiana",
+  14709187: "Gabriel",
+  14768999: "Veri",
+  15051439: "Thaisa",
+};
+
+async function kommoHit(path: string) {
+  if (!KOMMO_TOKEN) return null;
+  const r = await fetch(`${KOMMO_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${KOMMO_TOKEN}` },
+  });
+  if (r.status === 204 || !r.ok) return null;
+  return r.json();
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Search Kommo by last 8 digits of each phone number (avoids 9th-digit mismatch).
+ * Queries run in parallel batches of 5 to stay within Kommo rate limits.
+ */
+async function buildPhoneVendedoraMap(phones: string[]): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  if (!KOMMO_TOKEN || phones.length === 0) return map;
+
+  // Deduplicate by last 8 digits
+  const uniquePhones: Array<{ last8: string }> = [];
+  const seen = new Set<string>();
+  for (const p of phones) {
+    const d = p.replace(/\D/g, "");
+    if (d.length < 8) continue;
+    const last8 = d.slice(-8);
+    if (seen.has(last8)) continue;
+    seen.add(last8);
+    uniquePhones.push({ last8 });
+  }
+
+  // Query in parallel batches of 5
+  for (let i = 0; i < uniquePhones.length; i += 5) {
+    const batch = uniquePhones.slice(i, i + 5);
+    const results = await Promise.all(
+      batch.map(async ({ last8 }) => {
+        try {
+          const data = await kommoHit(`/api/v4/leads?query=${last8}&limit=1`);
+          const lead = data?._embedded?.leads?.[0];
+          return { last8, uid: lead?.responsible_user_id || null };
+        } catch {
+          return { last8, uid: null };
+        }
+      })
+    );
+    for (const { last8, uid } of results) {
+      if (uid) map[last8] = KOMMO_USERS[uid] || `User ${uid}`;
+    }
+    if (i + 5 < uniquePhones.length) await wait(200);
+  }
+
+  return map;
+}
+
 // Paths that count as "prescription" for the aggregation
 const HUMAN_SALE_PATHS = [
   "prescription_checkout",
@@ -66,9 +129,16 @@ export async function GET(req: NextRequest) {
   // Build sales list with agendamento classification
   // Agendamento: max order < R$100 (10000 cents) — scheduling fee
   // Venda: max order >= R$100 — actual product sale
-  const sales = leads
-    ?.filter((l) => orderDateMap[l.id])
-    .map((l) => ({
+  const filteredLeads = leads?.filter((l) => orderDateMap[l.id]) || [];
+
+  // Fetch vendedor from Kommo by phone (matched on last 8 digits)
+  const phones = filteredLeads.map((l) => l.phone || "").filter(Boolean);
+  const phoneVendedoraMap = await buildPhoneVendedoraMap(phones);
+
+  const sales = filteredLeads.map((l) => {
+    const digits = (l.phone || "").replace(/\D/g, "");
+    const last8 = digits.slice(-8);
+    return {
       id: l.id,
       name: l.name,
       phone: l.phone || "",
@@ -78,7 +148,9 @@ export async function GET(req: NextRequest) {
       is_affiliate: !!l.referring_afiliado_id && l.checkout_path !== "prescription_checkout",
       referring_afiliado_id: l.referring_afiliado_id,
       is_agendamento: (leadMaxOrder[l.id] || 0) < 10000,
-    }));
+      vendedor: phoneVendedoraMap[last8] || null,
+    };
+  });
 
   // Aggregate by checkout_path (separate vendas from agendamentos)
   const aggMap: Record<string, { vendas: number; agendamentos: number; afiliado: number; sem_atendimento: number }> = {};
