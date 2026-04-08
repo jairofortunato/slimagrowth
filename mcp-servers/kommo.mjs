@@ -442,6 +442,158 @@ server.tool(
   }
 );
 
+// Note type mapping for Kommo notes API
+const NOTE_TYPES = {
+  4: "text_note",        // Regular text note
+  10: "system",          // System message
+  25: "sms_in",          // Incoming SMS
+  26: "sms_out",         // Outgoing SMS
+  36: "chat_in",         // Incoming chat message (WhatsApp etc)
+  37: "chat_out",        // Outgoing chat message (WhatsApp etc)
+};
+
+// Tool 7: Get conversation activity for a lead
+server.tool(
+  "kommo_messages",
+  "Get conversation activity for a lead: chat messages (incoming/outgoing with full text), internal notes, talk metadata, and message events. Chat messages from WhatsApp are available as notes with type chat_in (36) and chat_out (37).",
+  {
+    lead_id: z.number().describe("The Kommo lead ID"),
+    limit: z.number().optional().describe("Max items to return (default 100)"),
+    messages_only: z.boolean().optional().describe("If true, only return chat messages (note_type 36/37), no internal notes or events"),
+  },
+  async ({ lead_id, limit, messages_only }) => {
+    const maxN = limit || 100;
+
+    // 1. Get notes from lead — includes chat messages (type 36/37) and internal notes
+    const leadNotes = await pages(`/api/v4/leads/${lead_id}/notes?limit=250`, "notes", 5);
+    const noteItems = leadNotes.map((n) => ({
+      id: n.id,
+      source: NOTE_TYPES[n.note_type]?.includes("chat") ? "message" : "note",
+      type: NOTE_TYPES[n.note_type] || `note_${n.note_type}`,
+      direction: n.note_type === 36 ? "incoming" : n.note_type === 37 ? "outgoing" : null,
+      created: toDateTime(n.created_at),
+      created_by: vendedoraName(n.created_by),
+      text: n.params?.text || n.params?.uniq || n.params?.service || null,
+    }));
+
+    // 2. Get talks (conversations) linked to this lead via Talks API
+    let talkItems = [];
+    let eventItems = [];
+    let errors = [];
+
+    try {
+      const talksData = await hit(
+        `/api/v4/talks?filter[entity_type]=leads&filter[entity_id][]=${lead_id}&limit=250`
+      );
+      const talks = talksData?._embedded?.talks || [];
+
+      for (const talk of talks) {
+        talkItems.push({
+          id: talk.talk_id || talk.id,
+          source: "talk",
+          type: talk.origin || "unknown",
+          status: talk.status,
+          is_read: talk.is_read,
+          created: toDateTime(talk.created_at),
+          updated: toDateTime(talk.updated_at),
+          contact_id: talk.contact_id,
+          chat_id: talk.chat_id,
+        });
+      }
+
+      // 3. Get message events from the contact entity
+      // (Kommo stores chat events on the contact, not the lead)
+      const leadData = await hit(`/api/v4/leads/${lead_id}?with=contacts`);
+      const contacts = leadData?._embedded?.contacts || [];
+
+      const msgTypes = "incoming_chat_message,outgoing_chat_message,incoming_sms,outgoing_sms,incoming_call,outgoing_call";
+
+      for (const c of contacts) {
+        await wait(150);
+        const events = await pages(
+          `/api/v4/events?filter[entity]=contact&filter[entity_id]=${c.id}&filter[type]=${msgTypes}`,
+          "events",
+          3
+        );
+
+        for (const evt of events) {
+          const msgMeta = evt.value_after?.[0]?.message || {};
+          eventItems.push({
+            id: evt.id,
+            source: "event",
+            type: evt.type,
+            created: toDateTime(evt.created_at),
+            created_by: vendedoraName(evt.created_by),
+            channel: msgMeta.origin || null,
+            talk_id: msgMeta.talk_id || null,
+            message_id: msgMeta.id || null,
+          });
+        }
+      }
+    } catch (e) {
+      errors.push(e.message);
+    }
+
+    // 4. Also get lead-level events (status changes, field updates)
+    try {
+      const leadEvents = await pages(
+        `/api/v4/events?filter[entity]=lead&filter[entity_id]=${lead_id}&limit=250`,
+        "events",
+        3
+      );
+
+      for (const evt of leadEvents) {
+        if (evt.type === "lead_status_changed") {
+          const before = evt.value_before?.[0]?.lead_status || {};
+          const after = evt.value_after?.[0]?.lead_status || {};
+          eventItems.push({
+            id: evt.id,
+            source: "event",
+            type: evt.type,
+            created: toDateTime(evt.created_at),
+            created_by: vendedoraName(evt.created_by),
+            from_stage: STAGES.find((s) => s.id === before.id)?.name || before.id,
+            to_stage: STAGES.find((s) => s.id === after.id)?.name || after.id,
+          });
+        }
+      }
+    } catch (e) {
+      errors.push(e.message);
+    }
+
+    // 5. Merge and sort by created date
+    const chatMessages = noteItems.filter((n) => n.source === "message");
+    let items;
+    if (messages_only) {
+      items = chatMessages.slice(0, maxN);
+    } else {
+      items = [...noteItems, ...talkItems, ...eventItems]
+        .sort((a, b) => (a.created || "").localeCompare(b.created || ""))
+        .slice(0, maxN);
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            lead_id,
+            total: items.length,
+            chat_messages: chatMessages.length,
+            incoming: chatMessages.filter((m) => m.direction === "incoming").length,
+            outgoing: chatMessages.filter((m) => m.direction === "outgoing").length,
+            notes_count: noteItems.filter((n) => n.source === "note").length,
+            talks_count: talkItems.length,
+            status_changes: eventItems.filter((e) => e.type === "lead_status_changed").length,
+            timeline: items,
+            ...(errors.length > 0 ? { errors } : {}),
+          }, null, 2),
+        },
+      ],
+    };
+  }
+);
+
 // Start
 const transport = new StdioServerTransport();
 await server.connect(transport);
