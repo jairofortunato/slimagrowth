@@ -153,6 +153,12 @@ const FUNNEL_MEDICOS_ROWS: FunnelRowDef[] = [
   { label: "Faturamento", field: "faturamento", currency: true, bold: true, noConv: true, auto: true },
 ];
 
+const VENDEDORAS: { name: string; color: string }[] = [
+  { name: "Veridiana", color: "#C75028" },
+  { name: "Thaisa", color: "#2563EB" },
+  { name: "Gabriel", color: "#059669" },
+];
+
 // Manual overrides for "venda sem atendimento" (by lead name)
 const SEM_ATENDIMENTO: Record<string, boolean> = {
   "Dionisio Stefano Rafael Pereira": true,
@@ -291,6 +297,8 @@ export default function Home() {
   // Meta and funnel state
   const [metaMensal, setMetaMensal] = useState(0);
   const [metaInput, setMetaInput] = useState("");
+  const [metasIndividuais, setMetasIndividuais] = useState<Record<string, number>>({});
+  const [metasIndividuaisInputs, setMetasIndividuaisInputs] = useState<Record<string, string>>({});
   const [funnel, setFunnel] = useState<FunnelData>(EMPTY_FUNNEL);
   const [funnelInputs, setFunnelInputs] = useState<Record<string, string>>({});
   const [funnelAfiliados, setFunnelAfiliados] = useState<FunnelAfiliadosData>(EMPTY_FUNNEL_AFILIADOS);
@@ -345,6 +353,16 @@ export default function Home() {
         }
         setFunnelMedicosInputs(inputs);
       }
+      const savedMetasInd = localStorage.getItem("slima_metas_individuais");
+      if (savedMetasInd) {
+        const m = JSON.parse(savedMetasInd) as Record<string, number>;
+        setMetasIndividuais(m);
+        const inputs: Record<string, string> = {};
+        for (const [k, v] of Object.entries(m)) {
+          if (v > 0) inputs[k] = v.toString();
+        }
+        setMetasIndividuaisInputs(inputs);
+      }
     } catch {
       // localStorage unavailable
     }
@@ -356,6 +374,18 @@ export default function Home() {
     setMetaMensal(num);
     try {
       localStorage.setItem("slima_meta", num.toString());
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleMetaIndividualChange(vendedora: string, value: string) {
+    setMetasIndividuaisInputs((prev) => ({ ...prev, [vendedora]: value }));
+    const num = parseFloat(value) || 0;
+    const updated = { ...metasIndividuais, [vendedora]: num };
+    setMetasIndividuais(updated);
+    try {
+      localStorage.setItem("slima_metas_individuais", JSON.stringify(updated));
     } catch {
       // ignore
     }
@@ -604,6 +634,24 @@ export default function Home() {
     const needPerDay = remainingDays > 0 ? (metaMensal - currentMonthMetrics.revenue) / remainingDays : 0;
     return { totalDays, currentDay, escalonado, gap, progress, remainingDays, needPerDay };
   }, [metaMensal, currentMonthMetrics]);
+
+  // Per-vendedora aggregations (follows date filter via `sales`)
+  const vendedorasMetrics = useMemo(() => {
+    return VENDEDORAS.map((v) => {
+      const key = v.name.toLowerCase();
+      const sellerSales = sales.filter((s) => (s.vendedor || "").toLowerCase().includes(key));
+      const vendas = sellerSales.length;
+      const faturamento = sellerSales.reduce(
+        (sum, s) => sum + (s.order_value ? parseFloat(s.order_value) : 0),
+        0,
+      );
+      const ticketMedio = vendas > 0 ? faturamento / vendas : 0;
+      const meta = metasIndividuais[v.name] || 0;
+      const progresso = meta > 0 ? (faturamento / meta) * 100 : 0;
+      const falta = Math.max(meta - faturamento, 0);
+      return { ...v, vendas, faturamento, ticketMedio, meta, progresso, falta };
+    });
+  }, [sales, metasIndividuais]);
 
   // Funnel computed values (will be recalculated after effectiveAds is built)
   let funnelCliquesTotal = 0;
@@ -879,6 +927,105 @@ export default function Home() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Vendas por Vendedora */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg overflow-hidden mb-6">
+        <div className="px-5 py-4 border-b border-[#E5E2DC] flex items-center justify-between">
+          <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028]">VENDAS POR VENDEDORA</h3>
+          <span className="text-[10px] text-[#9B9590] uppercase tracking-wide">
+            {dateFrom || dateTo ? `${dateFrom || "início"} → ${dateTo || "hoje"}` : "Todo período"}
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#F4F2EE] text-[#3A3530]">
+                <th className="text-left px-4 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Vendedora</th>
+                <th className="text-center px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Vendas</th>
+                <th className="text-right px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Faturamento</th>
+                <th className="text-right px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Ticket Médio</th>
+                <th className="text-right px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Meta</th>
+                <th className="text-center px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide w-[200px]">Progresso</th>
+                <th className="text-right px-3 py-2.5 font-semibold text-[10px] uppercase tracking-wide">Falta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {vendedorasMetrics.map((v) => (
+                <tr key={v.name} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: v.color }} />
+                      <span className="font-semibold">{v.name}</span>
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-center font-semibold">{v.vendas}</td>
+                  <td className="px-3 py-3 text-right font-semibold">{formatCurrencyNum(v.faturamento)}</td>
+                  <td className="px-3 py-3 text-right text-[#6B6560]">{v.vendas > 0 ? formatCurrencyNum(v.ticketMedio) : "—"}</td>
+                  <td className="px-3 py-3 text-right">
+                    <input
+                      type="number"
+                      value={metasIndividuaisInputs[v.name] ?? ""}
+                      onChange={(e) => handleMetaIndividualChange(v.name, e.target.value)}
+                      placeholder="0"
+                      className="w-28 px-2 py-1 text-sm border border-[#E5E2DC] rounded text-right focus:outline-none focus:border-[#C75028]"
+                    />
+                  </td>
+                  <td className="px-3 py-3">
+                    {v.meta > 0 ? (
+                      <div>
+                        <div className="w-full bg-[#F0EDEA] rounded-full h-2 mb-1">
+                          <div
+                            className="h-2 rounded-full transition-all duration-500"
+                            style={{
+                              width: `${Math.min(v.progresso, 100)}%`,
+                              backgroundColor: v.progresso >= 100 ? "#059669" : v.color,
+                            }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-center font-medium" style={{ color: v.progresso >= 100 ? "#059669" : "#6B6560" }}>
+                          {v.progresso.toFixed(1)}%
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-center text-[#9B9590]">defina meta</p>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 text-right text-[#6B6560]">
+                    {v.meta > 0 ? formatCurrencyNum(v.falta) : "—"}
+                  </td>
+                </tr>
+              ))}
+              {(() => {
+                const totVendas = vendedorasMetrics.reduce((s, v) => s + v.vendas, 0);
+                const totFat = vendedorasMetrics.reduce((s, v) => s + v.faturamento, 0);
+                const totMeta = vendedorasMetrics.reduce((s, v) => s + v.meta, 0);
+                const totFalta = vendedorasMetrics.reduce((s, v) => s + v.falta, 0);
+                const totTicket = totVendas > 0 ? totFat / totVendas : 0;
+                const totProgresso = totMeta > 0 ? (totFat / totMeta) * 100 : 0;
+                return (
+                  <tr className="bg-[#FAFAF8] font-bold border-t-2 border-[#E5E2DC]">
+                    <td className="px-4 py-3">Total</td>
+                    <td className="px-3 py-3 text-center">{totVendas}</td>
+                    <td className="px-3 py-3 text-right">{formatCurrencyNum(totFat)}</td>
+                    <td className="px-3 py-3 text-right text-[#6B6560]">{totVendas > 0 ? formatCurrencyNum(totTicket) : "—"}</td>
+                    <td className="px-3 py-3 text-right">{totMeta > 0 ? formatCurrencyNum(totMeta) : "—"}</td>
+                    <td className="px-3 py-3 text-center text-xs">
+                      {totMeta > 0 ? (
+                        <span style={{ color: totProgresso >= 100 ? "#059669" : "#6B6560" }}>
+                          {totProgresso.toFixed(1)}%
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-right">{totMeta > 0 ? formatCurrencyNum(totFalta) : "—"}</td>
+                  </tr>
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* KPI Cards */}
