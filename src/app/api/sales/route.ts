@@ -5,12 +5,25 @@ export const dynamic = "force-dynamic";
 
 const KOMMO_BASE = `https://${process.env.KOMMO_SUBDOMAIN}.kommo.com`;
 const KOMMO_TOKEN = process.env.KOMMO_LONG_LIVED_TOKEN;
-const KOMMO_USERS: Record<number, string> = {
-  14597455: "Veridiana",
-  14709187: "Gabriel",
-  14768999: "Veri",
-  15051439: "Thaisa",
-};
+
+// Kommo lead custom field "Vendedor(a)" — written by the SDR/seller themselves.
+// More reliable than responsible_user_id, since 14709187 is shared between
+// Gabriel and Thaisa in the sellers table.
+const KOMMO_VENDEDOR_FIELD_ID = 4322938;
+
+// Normalize whatever the seller typed in the Vendedor(a) field to the
+// display_name used by the sellers table ("Veri" is how Veridiana writes it).
+function normalizeVendedorLabel(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower === "veri" || lower === "veridiana") return "Veridiana";
+  if (lower === "thaisa") return "Thaisa";
+  if (lower === "gabriel") return "Gabriel";
+  if (lower === "jairo") return "Jairo";
+  return trimmed;
+}
 
 async function kommoHit(path: string) {
   if (!KOMMO_TOKEN) return null;
@@ -25,7 +38,8 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Search Kommo by last 8 digits of each phone number (avoids 9th-digit mismatch).
- * Queries run in parallel batches of 5 to stay within Kommo rate limits.
+ * Reads the lead's "Vendedor(a)" custom field (text). Queries run in parallel
+ * batches of 5 to stay within Kommo rate limits.
  */
 async function buildPhoneVendedoraMap(phones: string[]): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
@@ -51,14 +65,19 @@ async function buildPhoneVendedoraMap(phones: string[]): Promise<Record<string, 
         try {
           const data = await kommoHit(`/api/v4/leads?query=${last8}&limit=1`);
           const lead = data?._embedded?.leads?.[0];
-          return { last8, uid: lead?.responsible_user_id || null };
+          if (!lead) return { last8, name: null as string | null };
+          const cf = (lead.custom_fields_values || []).find(
+            (f: { field_id?: number }) => f?.field_id === KOMMO_VENDEDOR_FIELD_ID,
+          );
+          const raw = cf?.values?.[0]?.value as string | undefined;
+          return { last8, name: normalizeVendedorLabel(raw) };
         } catch {
-          return { last8, uid: null };
+          return { last8, name: null as string | null };
         }
       })
     );
-    for (const { last8, uid } of results) {
-      if (uid) map[last8] = KOMMO_USERS[uid] || `User ${uid}`;
+    for (const { last8, name } of results) {
+      if (name) map[last8] = name;
     }
     if (i + 5 < uniquePhones.length) await wait(200);
   }
@@ -92,7 +111,7 @@ export async function GET(req: NextRequest) {
   // Fetch ALL paid leads (no date filter here — date filtering is done via orders)
   const leadsQuery = supabase
     .from("leads")
-    .select("id, name, phone, checkout_path, payment_status, order_value, referring_afiliado_id, created_at")
+    .select("id, name, phone, checkout_path, payment_status, order_value, referring_afiliado_id, created_at, assigned_seller")
     .eq("payment_status", "paid")
     .order("created_at", { ascending: false });
 
@@ -131,13 +150,30 @@ export async function GET(req: NextRequest) {
   // Venda: max order >= R$100 — actual product sale
   const filteredLeads = leads?.filter((l) => orderDateMap[l.id]) || [];
 
-  // Fetch vendedor from Kommo by phone (matched on last 8 digits)
-  const phones = filteredLeads.map((l) => l.phone || "").filter(Boolean);
+  // Resolve vendedor in this priority:
+  //   1. leads.assigned_seller (slug → sellers.display_name) — source of truth post-2026-04-13
+  //   2. Kommo "Vendedor(a)" custom field, matched by phone last-8 digits — fallback for older leads
+  const { data: sellersData } = await supabase
+    .from("sellers")
+    .select("slug, display_name");
+  const sellerSlugMap: Record<string, string> = {};
+  for (const s of sellersData || []) {
+    if (s.slug && s.display_name) sellerSlugMap[s.slug] = s.display_name;
+  }
+
+  const leadsNeedingKommo = filteredLeads.filter((l) => !l.assigned_seller);
+  const phones = leadsNeedingKommo.map((l) => l.phone || "").filter(Boolean);
   const phoneVendedoraMap = await buildPhoneVendedoraMap(phones);
 
   const sales = filteredLeads.map((l) => {
-    const digits = (l.phone || "").replace(/\D/g, "");
-    const last8 = digits.slice(-8);
+    let vendedor: string | null = null;
+    if (l.assigned_seller && sellerSlugMap[l.assigned_seller]) {
+      vendedor = sellerSlugMap[l.assigned_seller];
+    } else {
+      const digits = (l.phone || "").replace(/\D/g, "");
+      const last8 = digits.slice(-8);
+      vendedor = phoneVendedoraMap[last8] || null;
+    }
     return {
       id: l.id,
       name: l.name,
@@ -148,7 +184,7 @@ export async function GET(req: NextRequest) {
       is_affiliate: !!l.referring_afiliado_id && l.checkout_path !== "prescription_checkout",
       referring_afiliado_id: l.referring_afiliado_id,
       is_agendamento: (leadMaxOrder[l.id] || 0) < 10000,
-      vendedor: phoneVendedoraMap[last8] || null,
+      vendedor,
     };
   });
 

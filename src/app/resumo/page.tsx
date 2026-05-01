@@ -17,6 +17,7 @@ interface Sale {
   is_affiliate: boolean;
   referring_afiliado_id: string | null;
   is_agendamento: boolean;
+  vendedor: string | null;
 }
 
 interface ChannelFunnel {
@@ -40,7 +41,7 @@ interface SubChannelData {
 }
 
 interface Perf { won: number; lost: number; winRate: number; avgDays: number }
-interface FunnelStage { id: number; name: string; veri: number; thaisa: number; total: number }
+interface FunnelStage { id: number; name: string; veri: number; thaisa: number; gabriel?: number; total: number }
 interface ActivityDay {
   date: string;
   veri: { msgs: number; calls: number; changes: number };
@@ -49,9 +50,9 @@ interface ActivityDay {
 interface LeadDetail { kommoId: number; name: string; phone: string; price: number; createdAt: string; closedAt: string; vendedora: string }
 interface KommoData {
   funnel: FunnelStage[];
-  performance: { veri: Perf; thaisa: Perf; total: Perf };
+  performance: { veri: Perf; thaisa: Perf; gabriel?: Perf; total: Perf };
   health: FunnelStage[];
-  staleLeads: { veri: number; thaisa: number; total: number };
+  staleLeads: { veri: number; thaisa: number; gabriel?: number; total: number };
   overdueTasks: { veri: number; thaisa: number; total: number };
   activity: ActivityDay[];
   wonLeads: LeadDetail[];
@@ -344,10 +345,11 @@ export default function ResumoPage() {
 
   // Kommo: vendedoras won leads this month
   const vendedorasWon = useMemo(() => {
-    if (!kommo) return { veri: [] as LeadDetail[], thaisa: [] as LeadDetail[] };
+    if (!kommo) return { veri: [] as LeadDetail[], thaisa: [] as LeadDetail[], gabriel: [] as LeadDetail[] };
     return {
       veri: kommo.wonLeads.filter(l => l.vendedora === "Veridiana"),
       thaisa: kommo.wonLeads.filter(l => l.vendedora === "Thaisa"),
+      gabriel: kommo.wonLeads.filter(l => l.vendedora === "Gabriel"),
     };
   }, [kommo]);
 
@@ -406,7 +408,9 @@ export default function ResumoPage() {
         checkoutPath: s.checkout_path,
         kommoMatch: !!match,
         kommoId: match?.kommoId || null,
-        vendedora: match?.vendedora || null,
+        // Prefer assigned_seller (Supabase) → Kommo Vendedor(a) field via /api/sales,
+        // and only fall back to the Kommo phone-match attribution.
+        vendedora: s.vendedor || match?.vendedora || null,
         kommoPrice: match?.price || 0,
         kmmoCriado: match?.createdAt || null,
         kmmoFechado: match?.closedAt || null,
@@ -451,13 +455,14 @@ export default function ResumoPage() {
   // Search filter for the table
   const [clientSearch, setClientSearch] = useState("");
   const [filterChannel, setFilterChannel] = useState<"all" | "Ads" | "Afiliados">("all");
-  const [filterVendedora, setFilterVendedora] = useState<"all" | "Veridiana" | "Thaisa" | "sem">("all");
+  const [filterVendedora, setFilterVendedora] = useState<"all" | "Veridiana" | "Thaisa" | "Gabriel" | "sem">("all");
 
   const filteredClients = useMemo(() => {
     let list = mergedClients;
     if (filterChannel !== "all") list = list.filter(c => c.channel === filterChannel);
     if (filterVendedora === "Veridiana") list = list.filter(c => c.vendedora === "Veridiana");
     else if (filterVendedora === "Thaisa") list = list.filter(c => c.vendedora === "Thaisa");
+    else if (filterVendedora === "Gabriel") list = list.filter(c => c.vendedora === "Gabriel");
     else if (filterVendedora === "sem") list = list.filter(c => !c.vendedora);
     if (clientSearch) {
       const q = clientSearch.toLowerCase();
@@ -986,17 +991,18 @@ export default function ResumoPage() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 4: VENDEDORAS — VERI & THAISA                                 */}
+      {/* SECTION 4: VENDEDORAS — VERI, THAISA & GABRIEL                        */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDEDORAS: VERI &amp; THAISA</h2>
+      <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDEDORAS: VERI, THAISA &amp; GABRIEL</h2>
 
       {kommo ? (
         <>
           {/* Performance Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             {[
               { label: "Veridiana", color: VERI_COLOR, p: kommo.performance.veri, won: vendedorasWon.veri.length },
               { label: "Thaisa", color: THAISA_COLOR, p: kommo.performance.thaisa, won: vendedorasWon.thaisa.length },
+              { label: "Gabriel", color: "#059669", p: kommo.performance.gabriel ?? { won: 0, lost: 0, winRate: 0, avgDays: 0 }, won: vendedorasWon.gabriel.length },
               { label: "Total", color: "#1A1A1A", p: kommo.performance.total, won: kommo.wonLeads.length },
             ].map(({ label, color, p, won }) => (
               <div key={label} className="bg-white border border-[#E5E2DC] rounded-lg p-5">
@@ -1032,7 +1038,7 @@ export default function ResumoPage() {
               <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">FUNIL POR VENDEDORA</h3>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart
-                  data={kommo.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa }))}
+                  data={kommo.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa, Gabriel: s.gabriel || 0 }))}
                   layout="vertical"
                   margin={{ left: 10, right: 20, top: 5, bottom: 5 }}
                 >
@@ -1043,6 +1049,7 @@ export default function ResumoPage() {
                   <Legend />
                   <Bar dataKey="Veridiana" fill={VERI_COLOR} radius={[0, 3, 3, 0]} />
                   <Bar dataKey="Thaisa" fill={THAISA_COLOR} radius={[0, 3, 3, 0]} />
+                  <Bar dataKey="Gabriel" fill="#059669" radius={[0, 3, 3, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1216,6 +1223,7 @@ export default function ResumoPage() {
                   { key: "all" as const, label: "Todas" },
                   { key: "Veridiana" as const, label: "Veri" },
                   { key: "Thaisa" as const, label: "Thaisa" },
+                  { key: "Gabriel" as const, label: "Gabriel" },
                   { key: "sem" as const, label: "Sem vendedora" },
                 ]).map(({ key, label }) => (
                   <button key={key} onClick={() => setFilterVendedora(key)}
@@ -1284,16 +1292,20 @@ export default function ResumoPage() {
                           {c.dataPagamento !== "\u2014" ? fmtShort(c.dataPagamento) : "\u2014"}
                         </td>
                         <td className="px-3 py-2.5">
-                          {c.vendedora ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded"
-                              style={{
-                                backgroundColor: c.vendedora === "Veridiana" ? `${VERI_COLOR}15` : `${THAISA_COLOR}15`,
-                                color: c.vendedora === "Veridiana" ? VERI_COLOR : THAISA_COLOR,
-                              }}>
-                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.vendedora === "Veridiana" ? VERI_COLOR : THAISA_COLOR }} />
-                              {c.vendedora === "Veridiana" ? "Veri" : "Thaisa"}
-                            </span>
-                          ) : (
+                          {c.vendedora ? (() => {
+                            const color = c.vendedora === "Veridiana" ? VERI_COLOR
+                              : c.vendedora === "Gabriel" ? "#059669"
+                              : c.vendedora === "Thaisa" ? THAISA_COLOR
+                              : "#9B9590";
+                            const short = c.vendedora === "Veridiana" ? "Veri" : c.vendedora;
+                            return (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded"
+                                style={{ backgroundColor: `${color}15`, color }}>
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                                {short}
+                              </span>
+                            );
+                          })() : (
                             <span className="text-xs text-[#9B9590]">&mdash;</span>
                           )}
                         </td>

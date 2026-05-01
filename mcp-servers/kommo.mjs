@@ -14,11 +14,27 @@ const BASE = "https://contatoslimasaudecom.kommo.com";
 const TOKEN = process.env.KOMMO_LONG_LIVED_TOKEN;
 const PIPELINE = 12894447;
 
+// Kommo user accounts (NB: 14709187 is shared between Gabriel and Thaisa —
+// disambiguate via the lead "Vendedor(a)" custom field id 4322938).
 const USERS = {
   14597455: "Veridiana",
-  14709187: "Thaisa",
+  14709187: "Gabriel",
 };
-const USER_IDS = { veridiana: 14597455, thaisa: 14709187 };
+const USER_IDS = { veridiana: 14597455, thaisa: 14709187, gabriel: 14709187 };
+const VENDEDOR_FIELD_ID = 4322938;
+
+function readVendedorField(l) {
+  const cf = (l?.custom_fields_values || []).find((f) => f?.field_id === VENDEDOR_FIELD_ID);
+  const raw = cf?.values?.[0]?.value;
+  if (typeof raw !== "string") return null;
+  const lower = raw.trim().toLowerCase();
+  if (!lower) return null;
+  if (lower === "veri" || lower === "veridiana") return "Veridiana";
+  if (lower === "thaisa") return "Thaisa";
+  if (lower === "gabriel") return "Gabriel";
+  if (lower === "jairo") return "Jairo";
+  return raw.trim();
+}
 
 const STAGES = [
   { id: 99426635, name: "Incoming Leads" },
@@ -78,7 +94,9 @@ async function pages(base, key, max = 10) {
   return items;
 }
 
-function vendedoraName(uid) {
+function vendedoraName(uid, lead) {
+  const fromField = lead ? readVendedorField(lead) : null;
+  if (fromField) return fromField;
   return USERS[uid] || `User ${uid}`;
 }
 
@@ -158,7 +176,7 @@ server.tool(
       id: l.id,
       name: l.name || "—",
       stage: STAGES.find((s) => s.id === l.status_id)?.name || l.status_id,
-      vendedora: vendedoraName(l.responsible_user_id),
+      vendedora: vendedoraName(l.responsible_user_id, l),
       price: l.price || 0,
       created: toDate(l.created_at),
       updated: toDateTime(l.updated_at),
@@ -374,7 +392,7 @@ server.tool(
         name: c?.name || l.name || "—",
         phone: c?.phone || "—",
         stage: STAGES.find((s) => s.id === l.status_id)?.name || l.status_id,
-        vendedora: vendedoraName(l.responsible_user_id),
+        vendedora: vendedoraName(l.responsible_user_id, l),
         price: l.price || 0,
         created: toDate(l.created_at),
       };
@@ -424,7 +442,7 @@ server.tool(
                   name: l.name,
                   stage: STAGES.find((s) => s.id === l.status_id)?.name,
                   lastUpdate: toDate(l.updated_at),
-                  vendedora: vendedoraName(l.responsible_user_id),
+                  vendedora: vendedoraName(l.responsible_user_id, l),
                 })),
               },
               overdueTasks: {

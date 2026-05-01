@@ -7,7 +7,7 @@ import {
 } from "recharts";
 
 interface Perf { won: number; lost: number; winRate: number; avgDays: number }
-interface FunnelStage { id: number; name: string; veri: number; thaisa: number; total: number }
+interface FunnelStage { id: number; name: string; veri: number; thaisa: number; gabriel?: number; total: number }
 interface ActivityDay {
   date: string;
   veri: { msgs: number; calls: number; changes: number };
@@ -16,9 +16,9 @@ interface ActivityDay {
 interface LeadDetail { name: string; phone: string; createdAt: string; closedAt: string; vendedora: string }
 interface KommoData {
   funnel: FunnelStage[];
-  performance: { veri: Perf; thaisa: Perf; total: Perf };
+  performance: { veri: Perf; thaisa: Perf; gabriel?: Perf; total: Perf };
   health: FunnelStage[];
-  staleLeads: { veri: number; thaisa: number; total: number };
+  staleLeads: { veri: number; thaisa: number; gabriel?: number; total: number };
   overdueTasks: { veri: number; thaisa: number; total: number };
   activity: ActivityDay[];
   wonLeads: LeadDetail[];
@@ -32,6 +32,7 @@ function fmtShort(d: string) { const p = d.split("-"); return `${p[2]}/${p[1]}`;
 
 const VERI_COLOR = "#C75028";
 const THAISA_COLOR = "#2563EB";
+const GABRIEL_COLOR = "#059669";
 
 export default function VendedorasPage() {
   const [authed, setAuthed] = useState<boolean | null>(null); // null = checking
@@ -118,7 +119,7 @@ export default function VendedorasPage() {
   // Funnel bar chart data
   const funnelChart = useMemo(() => {
     if (!data?.funnel) return [];
-    return data.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa }));
+    return data.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa, Gabriel: s.gabriel || 0 }));
   }, [data]);
 
   if (authed === null) {
@@ -200,10 +201,11 @@ export default function VendedorasPage() {
       {data && !loading && (
         <>
           {/* ═══ PERFORMANCE KPIs ═══ */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             {[
               { label: "Veridiana", color: VERI_COLOR, p: data.performance.veri },
               { label: "Thaisa", color: THAISA_COLOR, p: data.performance.thaisa },
+              { label: "Gabriel", color: GABRIEL_COLOR, p: data.performance.gabriel ?? { won: 0, lost: 0, winRate: 0, avgDays: 0 } },
               { label: "Total", color: "#1A1A1A", p: data.performance.total },
             ].map(({ label, color, p }) => (
               <div key={label} className="bg-white border border-[#E5E2DC] rounded-lg p-5">
@@ -246,6 +248,7 @@ export default function VendedorasPage() {
                   <Legend formatter={(v) => v} />
                   <Bar dataKey="Veridiana" fill={VERI_COLOR} radius={[0, 3, 3, 0]} />
                   <Bar dataKey="Thaisa" fill={THAISA_COLOR} radius={[0, 3, 3, 0]} />
+                  <Bar dataKey="Gabriel" fill={GABRIEL_COLOR} radius={[0, 3, 3, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -257,6 +260,7 @@ export default function VendedorasPage() {
                     <th className="text-left px-3 py-2 font-medium text-[#6B6560]">Etapa</th>
                     <th className="text-center px-3 py-2 font-medium" style={{ color: VERI_COLOR }}>Veridiana</th>
                     <th className="text-center px-3 py-2 font-medium" style={{ color: THAISA_COLOR }}>Thaisa</th>
+                    <th className="text-center px-3 py-2 font-medium" style={{ color: GABRIEL_COLOR }}>Gabriel</th>
                     <th className="text-center px-3 py-2 font-medium text-[#6B6560]">Total</th>
                     <th className="text-center px-3 py-2 font-medium text-[#6B6560]">Conv.</th>
                   </tr>
@@ -270,6 +274,7 @@ export default function VendedorasPage() {
                         <td className="px-3 py-2 text-xs font-medium">{s.name}</td>
                         <td className="px-3 py-2 text-center text-xs font-semibold">{fmt(s.veri)}</td>
                         <td className="px-3 py-2 text-center text-xs font-semibold">{fmt(s.thaisa)}</td>
+                        <td className="px-3 py-2 text-center text-xs font-semibold">{fmt(s.gabriel || 0)}</td>
                         <td className="px-3 py-2 text-center text-xs font-bold">{fmt(s.total)}</td>
                         <td className="px-3 py-2 text-center text-xs text-[#6B6560]">{idx > 0 ? fmtPct(conv) : "\u2014"}</td>
                       </tr>
@@ -327,16 +332,16 @@ export default function VendedorasPage() {
             <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">SAUDE DO PIPELINE (SNAPSHOT ATUAL)</h3>
 
             {/* Alerts */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
                 <p className="text-[10px] text-amber-700 uppercase mb-0.5">Tarefas Atrasadas</p>
                 <p className="text-2xl font-bold text-amber-700">{data.overdueTasks.total}</p>
-                <p className="text-[10px] text-amber-600">V:{data.overdueTasks.veri} T:{data.overdueTasks.thaisa}</p>
+                <p className="text-[10px] text-amber-600">V:{data.overdueTasks.veri} T+G:{data.overdueTasks.thaisa}</p>
               </div>
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-center">
                 <p className="text-[10px] text-orange-700 uppercase mb-0.5">Leads Parados (7d+)</p>
                 <p className="text-2xl font-bold text-orange-700">{data.staleLeads.total}</p>
-                <p className="text-[10px] text-orange-600">V:{data.staleLeads.veri} T:{data.staleLeads.thaisa}</p>
+                <p className="text-[10px] text-orange-600">V:{data.staleLeads.veri} T:{data.staleLeads.thaisa} G:{data.staleLeads.gabriel || 0}</p>
               </div>
               <div className="bg-[#F9F8F6] rounded-lg p-3 text-center">
                 <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Leads Veri (abertos)</p>
@@ -345,6 +350,10 @@ export default function VendedorasPage() {
               <div className="bg-[#F9F8F6] rounded-lg p-3 text-center">
                 <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Leads Thaisa (abertos)</p>
                 <p className="text-2xl font-bold" style={{ color: THAISA_COLOR }}>{fmt(data.health.reduce((s, h) => s + h.thaisa, 0))}</p>
+              </div>
+              <div className="bg-[#F9F8F6] rounded-lg p-3 text-center">
+                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Leads Gabriel (abertos)</p>
+                <p className="text-2xl font-bold" style={{ color: GABRIEL_COLOR }}>{fmt(data.health.reduce((s, h) => s + (h.gabriel || 0), 0))}</p>
               </div>
             </div>
 
@@ -356,6 +365,7 @@ export default function VendedorasPage() {
                     <th className="text-left px-3 py-2 font-medium text-[#6B6560]">Etapa</th>
                     <th className="text-center px-3 py-2 font-medium" style={{ color: VERI_COLOR }}>Veri</th>
                     <th className="text-center px-3 py-2 font-medium" style={{ color: THAISA_COLOR }}>Thaisa</th>
+                    <th className="text-center px-3 py-2 font-medium" style={{ color: GABRIEL_COLOR }}>Gabriel</th>
                     <th className="text-center px-3 py-2 font-medium text-[#6B6560]">Total</th>
                     <th className="text-left px-3 py-2 font-medium text-[#6B6560]">Distribuicao</th>
                   </tr>
@@ -363,17 +373,22 @@ export default function VendedorasPage() {
                 <tbody>
                   {data.health.map(s => {
                     const maxTotal = Math.max(...data.health.map(h => h.total), 1);
-                    const vPct = s.total > 0 ? (s.veri / s.total) * 100 : 50;
+                    const g = s.gabriel || 0;
+                    const vPct = s.total > 0 ? (s.veri / s.total) * 100 : 33;
+                    const tPct = s.total > 0 ? (s.thaisa / s.total) * 100 : 33;
+                    const gPct = s.total > 0 ? (g / s.total) * 100 : 34;
                     return (
                       <tr key={s.id} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
                         <td className="px-3 py-2 text-xs font-medium">{s.name}</td>
                         <td className="px-3 py-2 text-center text-xs font-semibold">{s.veri}</td>
                         <td className="px-3 py-2 text-center text-xs font-semibold">{s.thaisa}</td>
+                        <td className="px-3 py-2 text-center text-xs font-semibold">{g}</td>
                         <td className="px-3 py-2 text-center text-xs font-bold">{s.total}</td>
                         <td className="px-3 py-2">
                           <div className="flex h-4 rounded overflow-hidden" style={{ width: `${Math.max((s.total / maxTotal) * 100, 10)}%` }}>
                             <div style={{ width: `${vPct}%`, backgroundColor: VERI_COLOR }} />
-                            <div style={{ width: `${100 - vPct}%`, backgroundColor: THAISA_COLOR }} />
+                            <div style={{ width: `${tPct}%`, backgroundColor: THAISA_COLOR }} />
+                            <div style={{ width: `${gPct}%`, backgroundColor: GABRIEL_COLOR }} />
                           </div>
                         </td>
                       </tr>
@@ -383,6 +398,7 @@ export default function VendedorasPage() {
                     <td className="px-3 py-2 text-xs">Total Abertos</td>
                     <td className="px-3 py-2 text-center text-xs">{data.health.reduce((s, h) => s + h.veri, 0)}</td>
                     <td className="px-3 py-2 text-center text-xs">{data.health.reduce((s, h) => s + h.thaisa, 0)}</td>
+                    <td className="px-3 py-2 text-center text-xs">{data.health.reduce((s, h) => s + (h.gabriel || 0), 0)}</td>
                     <td className="px-3 py-2 text-center text-xs">{data.health.reduce((s, h) => s + h.total, 0)}</td>
                     <td />
                   </tr>
@@ -435,14 +451,19 @@ export default function VendedorasPage() {
                       <td className="px-4 py-2.5 text-[#6B6560]">{fmtShort(l.createdAt)}</td>
                       <td className="px-4 py-2.5 text-[#6B6560]">{l.closedAt !== "\u2014" ? fmtShort(l.closedAt) : "\u2014"}</td>
                       <td className="px-4 py-2.5">
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded"
-                          style={{
-                            backgroundColor: l.vendedora === "Veridiana" ? `${VERI_COLOR}15` : `${THAISA_COLOR}15`,
-                            color: l.vendedora === "Veridiana" ? VERI_COLOR : THAISA_COLOR,
-                          }}>
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: l.vendedora === "Veridiana" ? VERI_COLOR : THAISA_COLOR }} />
-                          {l.vendedora}
-                        </span>
+                        {(() => {
+                          const color = l.vendedora === "Veridiana" ? VERI_COLOR
+                            : l.vendedora === "Gabriel" ? GABRIEL_COLOR
+                            : l.vendedora === "Thaisa" ? THAISA_COLOR
+                            : "#9B9590";
+                          return (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded"
+                              style={{ backgroundColor: `${color}15`, color }}>
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                              {l.vendedora}
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   ))}

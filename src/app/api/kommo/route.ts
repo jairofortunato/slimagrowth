@@ -4,8 +4,35 @@ export const dynamic = "force-dynamic";
 
 const BASE = "https://contatoslimasaudecom.kommo.com";
 const PIPELINE = 12894447;
+// Veridiana has her own Kommo account.
 const VERI = 14597455;
-const THAISA = 14709187;
+// 14709187 is shared between Gabriel and Thaisa (see public.sellers).
+// Aggregate splits bucketed only by this id will conflate the two.
+const SHARED_GABRIEL_THAISA = 14709187;
+// Lead custom field "Vendedor(a)" — set by the seller themselves; the only
+// reliable way to tell Gabriel and Thaisa apart on the shared account.
+const VENDEDOR_FIELD_ID = 4322938;
+
+function readVendedorField(l: { custom_fields_values?: Array<{ field_id?: number; values?: Array<{ value?: unknown }> }> | null }): string | null {
+  const cf = (l.custom_fields_values || []).find(f => f?.field_id === VENDEDOR_FIELD_ID);
+  const raw = cf?.values?.[0]?.value;
+  if (typeof raw !== "string") return null;
+  const lower = raw.trim().toLowerCase();
+  if (!lower) return null;
+  if (lower === "veri" || lower === "veridiana") return "Veridiana";
+  if (lower === "thaisa") return "Thaisa";
+  if (lower === "gabriel") return "Gabriel";
+  if (lower === "jairo") return "Jairo";
+  return raw.trim();
+}
+
+function vendedoraFor(l: { responsible_user_id?: number; custom_fields_values?: Array<{ field_id?: number; values?: Array<{ value?: unknown }> }> | null }): string {
+  const fromField = readVendedorField(l);
+  if (fromField) return fromField;
+  if (l.responsible_user_id === VERI) return "Veridiana";
+  if (l.responsible_user_id === SHARED_GABRIEL_THAISA) return "Gabriel";
+  return "Outro";
+}
 
 const STAGES = [
   { id: 99426635, name: "Incoming Leads" },
@@ -108,17 +135,30 @@ export async function GET(req: NextRequest) {
       (!fU || l.closed_at >= fU) && (!tU || l.closed_at <= tU)
     );
 
+    // Bucket leads into Veridiana / Thaisa / Gabriel using the Vendedor(a)
+    // custom field, with a responsible_user_id fallback. The pipeline UI only
+    // exposes "veri" and "thaisa" columns, so until that is widened we collapse
+    // Gabriel into the shared 14709187 bucket and surface him separately.
+    type Bucket = "Veridiana" | "Thaisa" | "Gabriel" | "Outro";
+    const bucketOf = (l: { responsible_user_id?: number; custom_fields_values?: Array<{ field_id?: number; values?: Array<{ value?: unknown }> }> | null }): Bucket => {
+      const v = vendedoraFor(l);
+      if (v === "Veridiana" || v === "Thaisa" || v === "Gabriel") return v;
+      return "Outro";
+    };
+
     // Funnel (date-filtered)
     const funnel = OPEN_STAGES.map(st => {
-      const v = dLeads.filter(l => l.status_id === st.id && l.responsible_user_id === VERI).length;
-      const t = dLeads.filter(l => l.status_id === st.id && l.responsible_user_id === THAISA).length;
-      return { id: st.id, name: st.name, veri: v, thaisa: t, total: v + t };
+      const stageLeads = dLeads.filter(l => l.status_id === st.id);
+      const v = stageLeads.filter(l => bucketOf(l) === "Veridiana").length;
+      const t = stageLeads.filter(l => bucketOf(l) === "Thaisa").length;
+      const g = stageLeads.filter(l => bucketOf(l) === "Gabriel").length;
+      return { id: st.id, name: st.name, veri: v, thaisa: t, gabriel: g, total: stageLeads.length };
     });
 
-    // Performance
-    const perf = (uid: number | null) => {
-      const w = won.filter(l => !uid || l.responsible_user_id === uid);
-      const lo = lost.filter(l => !uid || l.responsible_user_id === uid);
+    // Performance — by bucket name, not raw user id
+    const perf = (target: Bucket | null) => {
+      const w = won.filter(l => !target || bucketOf(l) === target);
+      const lo = lost.filter(l => !target || bucketOf(l) === target);
       const n = w.length + lo.length;
       const days = w.filter(l => l.closed_at && l.created_at).map(l => (l.closed_at - l.created_at) / 86400);
       return {
@@ -131,9 +171,11 @@ export async function GET(req: NextRequest) {
 
     // Health (current snapshot, no date filter)
     const health = OPEN_STAGES.map(st => {
-      const v = pLeads.filter(l => l.status_id === st.id && l.responsible_user_id === VERI).length;
-      const t = pLeads.filter(l => l.status_id === st.id && l.responsible_user_id === THAISA).length;
-      return { id: st.id, name: st.name, veri: v, thaisa: t, total: v + t };
+      const stageLeads = pLeads.filter(l => l.status_id === st.id);
+      const v = stageLeads.filter(l => bucketOf(l) === "Veridiana").length;
+      const t = stageLeads.filter(l => bucketOf(l) === "Thaisa").length;
+      const g = stageLeads.filter(l => bucketOf(l) === "Gabriel").length;
+      return { id: st.id, name: st.name, veri: v, thaisa: t, gabriel: g, total: stageLeads.length };
     });
 
     const now = Math.floor(Date.now() / 1000);
@@ -150,12 +192,15 @@ export async function GET(req: NextRequest) {
     const calls = await pages(`/api/v4/events?filter[type][]=outgoing_call${ef}`, "events", 5);
     const statusEvts = await pages(`/api/v4/events?filter[type][]=lead_status_changed${ef}`, "events", 5);
 
-    // Group activity by day and vendedora
+    // Group activity by day and Kommo account.
+    // Note: events only have created_by (user_id), so the shared 14709187
+    // account cannot distinguish Gabriel from Thaisa here. We label that
+    // bucket "thaisa" for backwards compatibility with the existing UI.
     const actMap: Record<string, { veri: { msgs: number; calls: number; changes: number }; thaisa: { msgs: number; calls: number; changes: number } }> = {};
     const addEvt = (evts: any[], key: "msgs" | "calls" | "changes") => {
       for (const e of evts) {
         const uid = e.created_by;
-        if (uid !== VERI && uid !== THAISA) continue;
+        if (uid !== VERI && uid !== SHARED_GABRIEL_THAISA) continue;
         const day = toDate(e.created_at);
         if (!actMap[day]) actMap[day] = {
           veri: { msgs: 0, calls: 0, changes: 0 },
@@ -209,23 +254,28 @@ export async function GET(req: NextRequest) {
         price: l.price || 0,
         createdAt: toDate(l.created_at),
         closedAt: l.closed_at ? toDate(l.closed_at) : "\u2014",
-        vendedora: l.responsible_user_id === VERI ? "Veridiana"
-          : l.responsible_user_id === THAISA ? "Thaisa" : "Outro",
+        vendedora: vendedoraFor(l),
       };
     };
 
     const result = {
       funnel,
-      performance: { veri: perf(VERI), thaisa: perf(THAISA), total: perf(null) },
+      performance: {
+        veri: perf("Veridiana"),
+        thaisa: perf("Thaisa"),
+        gabriel: perf("Gabriel"),
+        total: perf(null),
+      },
       health,
       staleLeads: {
-        veri: staleLeads.filter(l => l.responsible_user_id === VERI).length,
-        thaisa: staleLeads.filter(l => l.responsible_user_id === THAISA).length,
+        veri: staleLeads.filter(l => bucketOf(l) === "Veridiana").length,
+        thaisa: staleLeads.filter(l => bucketOf(l) === "Thaisa").length,
+        gabriel: staleLeads.filter(l => bucketOf(l) === "Gabriel").length,
         total: staleLeads.length,
       },
       overdueTasks: {
         veri: overdue.filter(t => t.responsible_user_id === VERI).length,
-        thaisa: overdue.filter(t => t.responsible_user_id === THAISA).length,
+        thaisa: overdue.filter(t => t.responsible_user_id === SHARED_GABRIEL_THAISA).length,
         total: overdue.length,
       },
       activity,
