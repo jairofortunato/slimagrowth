@@ -550,10 +550,7 @@ export default function Home() {
         case "sale_date": va = a.sale_date; vb = b.sale_date; break;
         case "checkout_path": va = PATH_LABELS[a.checkout_path] || a.checkout_path; vb = PATH_LABELS[b.checkout_path] || b.checkout_path; break;
         case "order_value": va = parseFloat(a.order_value || "0"); vb = parseFloat(b.order_value || "0"); break;
-        case "tipo": va = a.is_agendamento ? 0 : 1; vb = b.is_agendamento ? 0 : 1; break;
         case "vendedor": va = (a.vendedor || "zzz").toLowerCase(); vb = (b.vendedor || "zzz").toLowerCase(); break;
-        case "afiliado": va = a.is_affiliate ? 1 : 0; vb = b.is_affiliate ? 1 : 0; break;
-        case "sem_atendimento": va = SEM_ATENDIMENTO[a.name] ? 1 : 0; vb = SEM_ATENDIMENTO[b.name] ? 1 : 0; break;
       }
       if (va < vb) return desc ? 1 : -1;
       if (va > vb) return desc ? -1 : 1;
@@ -1705,10 +1702,7 @@ export default function Home() {
                   ["sale_date", "Data", "text-left"],
                   ["checkout_path", "Caminho", "text-left"],
                   ["order_value", "Valor", "text-right"],
-                  ["tipo", "Tipo", "text-center"],
                   ["vendedor", "Vendedor", "text-left"],
-                  ["afiliado", "Afiliado", "text-center"],
-                  ["sem_atendimento", "Sem Atendimento", "text-center"],
                 ] as const).map(([key, label, align]) => (
                   <th
                     key={key}
@@ -1742,20 +1736,7 @@ export default function Home() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-right font-medium">{formatCurrency(s.order_value)}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {s.is_agendamento ? (
-                      <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded bg-[#F0FDFA] text-[#14B8A6]">Agend.</span>
-                    ) : (
-                      <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded bg-[#F0FDF4] text-[#059669]">Venda</span>
-                    )}
-                  </td>
                   <td className="px-4 py-2.5 text-[#6B6560]">{s.vendedor || "\u2014"}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {s.is_affiliate ? "x" : ""}
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    {SEM_ATENDIMENTO[s.name] ? "x" : ""}
-                  </td>
                 </tr>
               ))}
             </tbody>
