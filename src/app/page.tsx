@@ -1242,6 +1242,95 @@ export default function Home() {
         </>
       )}
 
+      {/* ── ADS CONSOLIDADO ── */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg overflow-hidden mb-6">
+        <div className="bg-[#1A1A1A] text-white px-4 py-3 flex items-center justify-between">
+          <h3 className="text-sm font-bold tracking-wide uppercase">Ads — Consolidado</h3>
+          <div className="flex items-center gap-2 text-[10px]">
+            <span className={`px-2 py-0.5 rounded-full font-semibold ${metaError ? "bg-amber-200 text-amber-900" : "bg-green-200 text-green-900"}`}>
+              Meta: {metaError ? "Manual" : "API"}
+            </span>
+            <span className={`px-2 py-0.5 rounded-full font-semibold ${ga4Error ? "bg-amber-200 text-amber-900" : "bg-green-200 text-green-900"}`}>
+              Google: {ga4Error ? "Manual" : "API"}
+            </span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#F4F2EE] text-[#3A3530]">
+                <th className="text-left px-3 py-2 font-semibold text-[10px] uppercase tracking-wide">Métrica</th>
+                <th className="text-center px-3 py-2 font-semibold text-[10px] uppercase tracking-wide bg-[#FAFAF8]">Consolidado</th>
+                <th className="text-center px-3 py-2 font-semibold text-[10px] uppercase tracking-wide">Meta <span className="text-[9px] text-[#9B9590] normal-case">(API)</span></th>
+                <th className="text-center px-3 py-2 font-semibold text-[10px] uppercase tracking-wide">Google <span className="text-[9px] text-[#9B9590] normal-case">({ga4Error ? "input" : "API"})</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-[#F0EDEA]">
+                <td className="px-3 py-3 text-xs font-medium">Valor Gasto Ads</td>
+                <td className="px-3 py-3 text-center font-bold text-red-600 bg-[#FAFAF8]">{formatCurrencyFull(funnelGastoTotal)}</td>
+                <td className="px-3 py-3 text-center text-red-600 font-medium">
+                  {metaError ? (
+                    <input
+                      type="number"
+                      value={funnelInputs["gastoMeta"] ?? ""}
+                      onChange={(e) => handleFunnelChange("gastoMeta", e.target.value)}
+                      placeholder="0"
+                      className="w-full max-w-[120px] mx-auto px-1 py-1 text-sm border border-amber-400 bg-amber-50 rounded text-center text-red-600 focus:outline-none focus:border-[#C75028]"
+                    />
+                  ) : (
+                    formatCurrencyFull(effectiveAds["gastoMeta"] || 0)
+                  )}
+                </td>
+                <td className="px-3 py-3 text-center text-red-600 font-medium">
+                  {ga4Error ? (
+                    <input
+                      type="number"
+                      value={funnelInputs["gastoGoogle"] ?? ""}
+                      onChange={(e) => handleFunnelChange("gastoGoogle", e.target.value)}
+                      placeholder="0"
+                      className="w-full max-w-[120px] mx-auto px-1 py-1 text-sm border border-amber-400 bg-amber-50 rounded text-center text-red-600 focus:outline-none focus:border-[#C75028]"
+                    />
+                  ) : (
+                    formatCurrencyFull(effectiveAds["gastoGoogle"] || 0)
+                  )}
+                </td>
+              </tr>
+              <tr>
+                <td className="px-3 py-3 text-xs font-medium">Cliques no Link Ads</td>
+                <td className="px-3 py-3 text-center font-bold bg-[#FAFAF8]">{formatNum(funnelCliquesTotal)}</td>
+                <td className="px-3 py-3 text-center font-medium">
+                  {metaError ? (
+                    <input
+                      type="number"
+                      value={funnelInputs["cliquesMeta"] ?? ""}
+                      onChange={(e) => handleFunnelChange("cliquesMeta", e.target.value)}
+                      placeholder="0"
+                      className="w-full max-w-[120px] mx-auto px-1 py-1 text-sm border border-amber-400 bg-amber-50 rounded text-center focus:outline-none focus:border-[#C75028]"
+                    />
+                  ) : (
+                    formatNum(effectiveAds["cliquesMeta"] || 0)
+                  )}
+                </td>
+                <td className="px-3 py-3 text-center font-medium">
+                  {ga4Error ? (
+                    <input
+                      type="number"
+                      value={funnelInputs["cliquesGoogle"] ?? ""}
+                      onChange={(e) => handleFunnelChange("cliquesGoogle", e.target.value)}
+                      placeholder="0"
+                      className="w-full max-w-[120px] mx-auto px-1 py-1 text-sm border border-amber-400 bg-amber-50 rounded text-center focus:outline-none focus:border-[#C75028]"
+                    />
+                  ) : (
+                    formatNum(effectiveAds["cliquesGoogle"] || 0)
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Funnels Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
 
@@ -1317,10 +1406,28 @@ export default function Home() {
                     );
                   }
 
+                  const isMetaField = row.field === "gastoMeta" || row.field === "cliquesMeta";
+                  const isGoogleField = row.field === "gastoGoogle" || row.field === "cliquesGoogle";
+                  let sourceBadge: React.ReactNode = null;
+                  if (isMetaField) {
+                    sourceBadge = (
+                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wide ${metaError ? "bg-amber-200 text-amber-900" : "bg-green-200 text-green-900"}`}>
+                        {metaError ? "Manual" : "API"}
+                      </span>
+                    );
+                  } else if (isGoogleField) {
+                    sourceBadge = (
+                      <span className={`ml-2 px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wide ${ga4Error ? "bg-amber-200 text-amber-900" : "bg-green-200 text-green-900"}`}>
+                        {ga4Error ? "Manual" : "API"}
+                      </span>
+                    );
+                  }
+
                   return (
                     <tr key={idx} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${row.bold ? "bg-[#FAFAF8]" : ""}`}>
                       <td className={`px-3 py-2 text-xs ${row.indent ? "pl-6" : ""} ${row.bold ? "font-bold" : ""}`}>
                         {row.label}
+                        {sourceBadge}
                       </td>
                       <td className="px-2 py-2 text-center text-xs">{displayValue}</td>
                       <td className={`px-2 py-2 text-center text-xs ${row.red ? "text-red-600" : "text-[#6B6560]"}`}>{convRate}</td>
