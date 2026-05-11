@@ -951,12 +951,20 @@ export default function Home() {
               </tr>
             </thead>
             <tbody>
-              {vendedorasMetrics.map((v) => (
+              {vendedorasMetrics.map((v) => {
+                const slug = v.name === "Veridiana" ? "veri" : v.name === "Thaisa" ? "thaisa" : null;
+                return (
                 <tr key={v.name} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: v.color }} />
-                      <span className="font-semibold">{v.name}</span>
+                      {slug ? (
+                        <a href={`/vendedoras/${slug}`} className="font-semibold hover:underline" style={{ color: v.color }}>
+                          {v.name} →
+                        </a>
+                      ) : (
+                        <span className="font-semibold">{v.name}</span>
+                      )}
                     </span>
                   </td>
                   <td className="px-3 py-3 text-center font-semibold">{v.vendas}</td>
@@ -995,7 +1003,8 @@ export default function Home() {
                     {v.meta > 0 ? formatCurrencyNum(v.falta) : "—"}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {(() => {
                 const totVendas = vendedorasMetrics.reduce((s, v) => s + v.vendas, 0);
                 const totFat = vendedorasMetrics.reduce((s, v) => s + v.faturamento, 0);

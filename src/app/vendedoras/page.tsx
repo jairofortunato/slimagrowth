@@ -151,6 +151,8 @@ export default function VendedorasPage() {
           <p className="text-xs text-[#9B9590] mt-1">Dados do Kommo CRM</p>
         </div>
         <div className="flex items-center gap-3">
+          <a href="/vendedoras/veri" className="px-3 py-1.5 text-xs font-medium text-white rounded-lg hover:opacity-90 transition-opacity" style={{ backgroundColor: VERI_COLOR }}>Página Veri</a>
+          <a href="/vendedoras/thaisa" className="px-3 py-1.5 text-xs font-medium text-white rounded-lg hover:opacity-90 transition-opacity" style={{ backgroundColor: THAISA_COLOR }}>Página Thaisa</a>
           <a href="/resumo" className="px-3 py-1.5 text-xs font-medium bg-[#C75028] text-white rounded-lg hover:bg-[#A8421F] transition-colors">Resumo do Mes</a>
           <a href="/" className="text-xs text-[#C75028] hover:underline">&larr; Dashboard Principal</a>
         </div>
