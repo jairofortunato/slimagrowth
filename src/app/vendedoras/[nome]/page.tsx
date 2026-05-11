@@ -290,9 +290,11 @@ export default function VendedoraDetailPage() {
     const unassigned = unifiedRows.filter((r) => r.status === "unassigned").length;
     const total = unifiedRows.length;
 
-    // Comissão = R$ 30 × vendas do MÊS ATUAL (apenas owned + reassigned).
+    // Comissão e meta = R$ 30 × vendas próprias do MÊS ATUAL.
+    // Vendas do Gabriel (status "reassigned") aparecem só na tabela para
+    // recompra — não contam para a meta nem para a comissão da Thaisa.
     const monthRows = unifiedRows.filter(
-      (r) => (r.status === "owned" || r.status === "reassigned") && isCurrentMonth(r.date),
+      (r) => r.status === "owned" && isCurrentMonth(r.date),
     );
     const comissaoBase = monthRows.length;
     const comissao = comissaoBase * COMMISSION_PER_SALE;
@@ -420,6 +422,11 @@ export default function VendedoraDetailPage() {
                 </p>
                 <p className="text-xs text-[#9B9590] mt-0.5">
                   Cada vendedora tem meta de {totals.monthlyGoal} vendas em {totals.monthLabel}.
+                  {slug === "thaisa" && (
+                    <span className="block text-[10px] mt-0.5 text-[#9B9590]">
+                      Vendas do Gabriel só aparecem na tabela (para recompra) — não contam para a meta.
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="text-right">
