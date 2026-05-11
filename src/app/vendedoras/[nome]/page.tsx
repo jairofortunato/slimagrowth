@@ -19,6 +19,13 @@ interface SaleRow {
 // ─── Config ───────────────────────────────────────────────────────────────
 const COMMISSION_PER_SALE = 30;
 
+// Meta mensal por vendedora. Chave YYYY-MM. Quando o mês não estiver no
+// mapa, cai no DEFAULT_MONTHLY_GOAL.
+const MONTHLY_GOALS: Record<string, number> = {
+  "2026-05": 40,
+};
+const DEFAULT_MONTHLY_GOAL = 40;
+
 const VENDEDORAS = {
   veri: {
     display: "Veridiana",
@@ -291,9 +298,16 @@ export default function VendedoraDetailPage() {
     const comissao = comissaoBase * COMMISSION_PER_SALE;
     const faturamentoMes = monthRows.reduce((s, r) => s + r.value, 0);
 
+    // Meta do mês — mesma para Veri e Thaisa
+    const monthlyGoal = MONTHLY_GOALS[monthPrefix] ?? DEFAULT_MONTHLY_GOAL;
+    const faltaParaMeta = Math.max(monthlyGoal - comissaoBase, 0);
+    const progressoMeta = monthlyGoal > 0 ? Math.min((comissaoBase / monthlyGoal) * 100, 100) : 0;
+    const metaBatida = comissaoBase >= monthlyGoal;
+
     return {
       total, ownedCount, reassigned, unassigned,
       comissao, comissaoBase, faturamentoMes,
+      monthlyGoal, faltaParaMeta, progressoMeta, metaBatida,
       monthLabel: MONTH_NAMES[curMonth - 1],
       monthYear: curYear,
       monthPrefix,
@@ -392,6 +406,77 @@ export default function VendedoraDetailPage() {
                 Faturamento do mês: {fmtBRL(totals.faturamentoMes)}
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* ═══ META DO MÊS ═══ */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          {/* Meta + progresso (2 colunas) */}
+          <div className="md:col-span-2 bg-white border border-[#E5E2DC] rounded-2xl p-6">
+            <div className="flex items-baseline justify-between mb-3">
+              <div>
+                <p className="text-[11px] uppercase tracking-widest font-medium" style={{ color: config.color }}>
+                  META · {totals.monthLabel.toUpperCase()} {totals.monthYear}
+                </p>
+                <p className="text-xs text-[#9B9590] mt-0.5">
+                  Cada vendedora tem meta de {totals.monthlyGoal} vendas em {totals.monthLabel}.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-4xl font-bold leading-none">
+                  {totals.comissaoBase}
+                  <span className="text-2xl text-[#9B9590] font-normal"> / {totals.monthlyGoal}</span>
+                </p>
+                <p className="text-[10px] text-[#9B9590] mt-1 uppercase tracking-wide">vendas no mês</p>
+              </div>
+            </div>
+
+            <div className="w-full bg-[#F0EDEA] rounded-full h-3 overflow-hidden">
+              <div
+                className="h-3 rounded-full transition-all duration-500"
+                style={{
+                  width: `${totals.progressoMeta}%`,
+                  backgroundColor: totals.metaBatida ? "#059669" : config.color,
+                }}
+              />
+            </div>
+            <div className="flex justify-between mt-2 text-[11px]">
+              <span className="text-[#6B6560]">
+                {totals.progressoMeta.toFixed(0)}% concluído
+              </span>
+              <span className="text-[#6B6560]">
+                {totals.metaBatida ? "🎯 Meta batida" : `Faltam ${totals.faltaParaMeta} venda${totals.faltaParaMeta === 1 ? "" : "s"}`}
+              </span>
+            </div>
+          </div>
+
+          {/* Card "Faltam X vendas" */}
+          <div
+            className="rounded-2xl p-6 text-white shadow-lg flex flex-col justify-between"
+            style={{
+              background: totals.metaBatida
+                ? "linear-gradient(135deg, #059669 0%, #047857 100%)"
+                : `linear-gradient(135deg, ${config.color} 0%, ${config.colorDark} 100%)`,
+            }}
+          >
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.2em] opacity-80">
+                {totals.metaBatida ? "Meta atingida" : "Faltam para a meta"}
+              </p>
+              <p className="text-6xl font-bold mt-2 leading-none">
+                {totals.metaBatida ? totals.comissaoBase : totals.faltaParaMeta}
+              </p>
+              <p className="text-xs opacity-80 mt-2">
+                {totals.metaBatida
+                  ? `Você já bateu as ${totals.monthlyGoal} vendas de ${totals.monthLabel}!`
+                  : `venda${totals.faltaParaMeta === 1 ? "" : "s"} até atingir ${totals.monthlyGoal} em ${totals.monthLabel}`}
+              </p>
+            </div>
+            {!totals.metaBatida && totals.faltaParaMeta > 0 && (
+              <p className="text-[10px] opacity-70 mt-3">
+                Comissão restante: {fmtBRL(totals.faltaParaMeta * COMMISSION_PER_SALE)}
+              </p>
+            )}
           </div>
         </div>
 
