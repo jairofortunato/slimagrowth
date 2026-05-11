@@ -35,8 +35,22 @@ interface KommoData {
 const COMMISSION_PER_SALE = 30;
 
 const VENDEDORAS = {
-  veri: { display: "Veridiana", short: "Veri", color: "#C75028", match: ["Veridiana"] },
-  thaisa: { display: "Thaisa", short: "Thaisa", color: "#2563EB", match: ["Thaisa", "Gabriel"] },
+  veri: {
+    display: "Veridiana",
+    short: "Veri",
+    initial: "V",
+    color: "#C75028",
+    colorDark: "#8E3717",
+    match: ["Veridiana", "Veri"],
+  },
+  thaisa: {
+    display: "Thaisa",
+    short: "Thaisa",
+    initial: "T",
+    color: "#2563EB",
+    colorDark: "#1D4ED8",
+    match: ["Thaisa", "Gabriel"],
+  },
 } as const;
 
 type VendedoraSlug = keyof typeof VENDEDORAS;
@@ -75,6 +89,38 @@ function whatsappLink(raw: string) {
   return `https://wa.me/${withCountry}`;
 }
 
+function daysSince(iso: string) {
+  const d = new Date(iso + "T12:00:00");
+  const now = new Date();
+  const diff = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+  return diff < 0 ? 0 : diff;
+}
+
+function relativeLabel(iso: string): string {
+  const d = daysSince(iso);
+  if (d === 0) return "hoje";
+  if (d === 1) return "1 dia";
+  if (d < 30) return `${d} dias`;
+  if (d < 365) return `${Math.floor(d / 30)} m${Math.floor(d / 30) > 1 ? "eses" : "ês"}`;
+  return `${Math.floor(d / 365)} ano${Math.floor(d / 365) > 1 ? "s" : ""}`;
+}
+
+function categorizeVendedor(raw: string | null | undefined): "veri" | "thaisa" | "gabriel" | "none" {
+  if (!raw) return "none";
+  const v = raw.trim().toLowerCase();
+  if (!v) return "none";
+  if (v === "veridiana" || v === "veri") return "veri";
+  if (v === "thaisa") return "thaisa";
+  if (v === "gabriel") return "gabriel";
+  return "none";
+}
+
+const MONTH_NAMES = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+const WEEK_DAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
+
 // ─── Tipo unificado da tabela ─────────────────────────────────────────────
 interface UnifiedRow {
   key: string;
@@ -83,9 +129,11 @@ interface UnifiedRow {
   date: string; // YYYY-MM-DD
   value: number;
   originalVendedor: string;
-  reassigned: boolean;
+  status: "owned" | "reassigned" | "unassigned";
   source: "sistema" | "kommo";
 }
+
+type SortOrder = "asc" | "desc";
 
 export default function VendedoraDetailPage() {
   const params = useParams<{ nome: string }>();
@@ -99,8 +147,11 @@ export default function VendedoraDetailPage() {
   const [kommo, setKommo] = useState<KommoData | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [progressionEnabled, setProgressionEnabled] = useState(false);
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc"); // mais antigos no topo (recompra)
+  const [calendarMonth, setCalendarMonth] = useState<{ year: number; month: number } | null>(null);
+  const [showOnlyUnassigned, setShowOnlyUnassigned] = useState(false);
 
-  // Auth check via lightweight endpoint
+  // Auth check
   useEffect(() => {
     fetch("/api/sales")
       .then((r) => setAuthed(r.ok))
@@ -111,10 +162,7 @@ export default function VendedoraDetailPage() {
     setLoading(true);
     setError("");
     try {
-      const [salesRes, kommoRes] = await Promise.all([
-        fetch("/api/sales"),
-        fetch("/api/kommo"),
-      ]);
+      const [salesRes, kommoRes] = await Promise.all([fetch("/api/sales"), fetch("/api/kommo")]);
       if (salesRes.status === 401 || kommoRes.status === 401) {
         setAuthed(false);
         return;
@@ -134,80 +182,163 @@ export default function VendedoraDetailPage() {
     if (authed) loadData();
   }, [authed, loadData]);
 
-  // ─── Filtragem por vendedora ────────────────────────────────────────────
-  const ownedSales = useMemo(() => {
-    if (!config) return [] as SaleRow[];
-    return sales.filter((s) => {
-      const v = (s.vendedor || "").trim();
-      return config.match.some((m) => v.toLowerCase() === m.toLowerCase());
-    });
-  }, [sales, config]);
-
-  const ownedKommo = useMemo(() => {
-    if (!config || !kommo) return { won: [] as KommoLead[], lost: [] as KommoLead[] };
-    const matcher = (l: KommoLead) =>
-      config.match.some((m) => (l.vendedora || "").toLowerCase() === m.toLowerCase());
-    return {
-      won: kommo.wonLeads.filter(matcher),
-      lost: kommo.lostLeads.filter(matcher),
-    };
-  }, [kommo, config]);
-
-  // ─── Tabela unificada (sistema + Kommo, dedup por telefone) ─────────────
+  // ─── Construção dos rows unificados ─────────────────────────────────────
   const unifiedRows: UnifiedRow[] = useMemo(() => {
-    const map = new Map<string, UnifiedRow>();
+    if (!config) return [];
 
-    for (const s of ownedSales) {
+    const map = new Map<string, UnifiedRow>();
+    const myCats = new Set(config.match.map((m) => m.toLowerCase()));
+
+    const include = (cat: ReturnType<typeof categorizeVendedor>): UnifiedRow["status"] | null => {
+      // "sem vendedor" entra nas duas páginas
+      if (cat === "none") return "unassigned";
+      // Veri / Thaisa: pega leads do próprio nome
+      if (slug === "veri" && cat === "veri") return "owned";
+      // Thaisa: pega Thaisa direta e Gabriel transferido
+      if (slug === "thaisa" && cat === "thaisa") return "owned";
+      if (slug === "thaisa" && cat === "gabriel") return "reassigned";
+      // ignora o restante (ex.: Veri não vê leads da Thaisa)
+      return null;
+    };
+
+    for (const s of sales) {
+      const cat = categorizeVendedor(s.vendedor);
+      const status = include(cat);
+      if (!status) continue;
       const value = s.order_value ? parseFloat(s.order_value) : 0;
       const k = phoneKey(s.phone) || `sys-${s.id}`;
-      const origVend = (s.vendedor || "—").trim();
       map.set(k, {
         key: k,
         name: s.name || "—",
         phone: s.phone || "",
         date: s.sale_date.slice(0, 10),
         value,
-        originalVendedor: origVend,
-        reassigned: slug === "thaisa" && origVend.toLowerCase() === "gabriel",
+        originalVendedor: (s.vendedor || "").trim() || "—",
+        status,
         source: "sistema",
       });
     }
 
-    for (const l of ownedKommo.won) {
-      const k = phoneKey(l.phone) || `kommo-${l.kommoId}`;
-      if (map.has(k)) continue; // o sistema já tem essa venda
-      const origVend = (l.vendedora || "—").trim();
-      map.set(k, {
-        key: k,
-        name: l.name || "—",
-        phone: l.phone || "",
-        date: (l.closedAt && l.closedAt !== "—" ? l.closedAt : l.createdAt).slice(0, 10),
-        value: l.price || 0,
-        originalVendedor: origVend,
-        reassigned: slug === "thaisa" && origVend.toLowerCase() === "gabriel",
-        source: "kommo",
-      });
+    if (kommo) {
+      for (const l of kommo.wonLeads) {
+        const cat = categorizeVendedor(l.vendedora);
+        const status = include(cat);
+        if (!status) continue;
+        const k = phoneKey(l.phone) || `kommo-${l.kommoId}`;
+        if (map.has(k)) continue; // sistema tem prioridade
+        const date = (l.closedAt && l.closedAt !== "—" ? l.closedAt : l.createdAt).slice(0, 10);
+        map.set(k, {
+          key: k,
+          name: l.name || "—",
+          phone: l.phone || "",
+          date,
+          value: l.price || 0,
+          originalVendedor: (l.vendedora || "").trim() || "—",
+          status,
+          source: "kommo",
+        });
+      }
     }
 
-    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
-  }, [ownedSales, ownedKommo, slug]);
+    return Array.from(map.values());
+  }, [sales, kommo, slug, config]);
 
+  // ─── Calendário (default = mês mais recente com venda) ──────────────────
+  useEffect(() => {
+    if (calendarMonth || unifiedRows.length === 0) return;
+    const latest = unifiedRows.reduce((acc, r) => (r.date > acc ? r.date : acc), "");
+    if (latest) {
+      const [y, m] = latest.split("-").map(Number);
+      setCalendarMonth({ year: y, month: m });
+    } else {
+      const now = new Date();
+      setCalendarMonth({ year: now.getFullYear(), month: now.getMonth() + 1 });
+    }
+  }, [unifiedRows, calendarMonth]);
+
+  const salesByDay = useMemo(() => {
+    const map: Record<string, { count: number; total: number }> = {};
+    for (const r of unifiedRows) {
+      if (!map[r.date]) map[r.date] = { count: 0, total: 0 };
+      map[r.date].count += 1;
+      map[r.date].total += r.value;
+    }
+    return map;
+  }, [unifiedRows]);
+
+  const calendarDays = useMemo(() => {
+    if (!calendarMonth) return [] as Array<{ day: number | null; iso: string | null; count: number; total: number }>;
+    const { year, month } = calendarMonth;
+    const firstDay = new Date(year, month - 1, 1).getDay(); // 0 = domingo
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const cells: Array<{ day: number | null; iso: string | null; count: number; total: number }> = [];
+    for (let i = 0; i < firstDay; i++) cells.push({ day: null, iso: null, count: 0, total: 0 });
+    for (let d = 1; d <= daysInMonth; d++) {
+      const iso = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const stat = salesByDay[iso] || { count: 0, total: 0 };
+      cells.push({ day: d, iso, count: stat.count, total: stat.total });
+    }
+    return cells;
+  }, [calendarMonth, salesByDay]);
+
+  function navMonth(delta: number) {
+    if (!calendarMonth) return;
+    let m = calendarMonth.month + delta;
+    let y = calendarMonth.year;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    setCalendarMonth({ year: y, month: m });
+  }
+
+  // ─── Filtro + ordenação ─────────────────────────────────────────────────
   const filteredRows = useMemo(() => {
-    if (!searchQuery.trim()) return unifiedRows;
-    const q = searchQuery.toLowerCase();
-    return unifiedRows.filter(
-      (r) => r.name.toLowerCase().includes(q) || r.phone.replace(/\D/g, "").includes(q.replace(/\D/g, "")),
+    let list = unifiedRows;
+    if (showOnlyUnassigned) list = list.filter((r) => r.status === "unassigned");
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const qDigits = q.replace(/\D/g, "");
+      list = list.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (qDigits.length > 0 && r.phone.replace(/\D/g, "").includes(qDigits)),
+      );
+    }
+    return [...list].sort((a, b) =>
+      sortOrder === "asc" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date),
     );
-  }, [unifiedRows, searchQuery]);
+  }, [unifiedRows, searchQuery, sortOrder, showOnlyUnassigned]);
 
   // ─── KPIs ────────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1; // 1-12
+    const monthPrefix = `${curYear}-${String(curMonth).padStart(2, "0")}`;
+    const isCurrentMonth = (iso: string) => iso.startsWith(monthPrefix);
+
+    const ownedCount = unifiedRows.filter((r) => r.status === "owned").length;
+    const reassigned = unifiedRows.filter((r) => r.status === "reassigned").length;
+    const unassigned = unifiedRows.filter((r) => r.status === "unassigned").length;
     const total = unifiedRows.length;
-    const reassigned = unifiedRows.filter((r) => r.reassigned).length;
     const faturamento = unifiedRows.reduce((s, r) => s + r.value, 0);
     const ticketMedio = total > 0 ? faturamento / total : 0;
-    const comissao = total * COMMISSION_PER_SALE;
-    return { total, reassigned, faturamento, ticketMedio, comissao };
+
+    // Comissão = R$ 30 × vendas do MÊS ATUAL (apenas owned + reassigned).
+    const monthRows = unifiedRows.filter(
+      (r) => (r.status === "owned" || r.status === "reassigned") && isCurrentMonth(r.date),
+    );
+    const comissaoBase = monthRows.length;
+    const comissao = comissaoBase * COMMISSION_PER_SALE;
+    const faturamentoMes = monthRows.reduce((s, r) => s + r.value, 0);
+
+    return {
+      total, ownedCount, reassigned, unassigned,
+      faturamento, ticketMedio,
+      comissao, comissaoBase, faturamentoMes,
+      monthLabel: MONTH_NAMES[curMonth - 1],
+      monthYear: curYear,
+      monthPrefix,
+    };
   }, [unifiedRows]);
 
   // ─── Render guards ──────────────────────────────────────────────────────
@@ -242,220 +373,426 @@ export default function VendedoraDetailPage() {
     );
   }
 
+  const maxDayCount = calendarDays.reduce((m, d) => (d.count > m ? d.count : m), 0);
+
   return (
-    <div className="max-w-6xl mx-auto px-6 py-10">
-      {/* Header */}
-      <div className="flex items-baseline justify-between mb-8">
-        <div>
-          <p className="text-xs font-medium tracking-widest uppercase mb-1" style={{ color: config.color }}>
-            SLIMA GROWTH · VENDEDORA
-          </p>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
-            <span className="w-4 h-4 rounded-full" style={{ backgroundColor: config.color }} />
-            {config.display}
-          </h1>
-          <p className="text-xs text-[#9B9590] mt-1">
-            Histórico completo de vendas e leads
-            {slug === "thaisa" && totals.reassigned > 0 && (
-              <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 text-amber-700 text-[10px] font-medium">
-                {totals.reassigned} venda{totals.reassigned > 1 ? "s" : ""} transferida{totals.reassigned > 1 ? "s" : ""} do Gabriel
-              </span>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <a
-            href={slug === "veri" ? "/vendedoras/thaisa" : "/vendedoras/veri"}
-            className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg hover:bg-[#F9F8F6] transition-colors"
-          >
-            Ver {slug === "veri" ? "Thaisa" : "Veri"} →
+    <div className="min-h-screen bg-[#FAF8F4]">
+      <div className="max-w-6xl mx-auto px-6 py-8">
+        {/* ═══ TOP NAV ═══ */}
+        <div className="flex items-center justify-between mb-6 text-xs">
+          <a href="/vendedoras" className="text-[#9B9590] hover:text-[#C75028] transition-colors">
+            ← Painel Vendedoras
           </a>
-          <a href="/vendedoras" className="text-xs text-[#C75028] hover:underline">← Painel Vendedoras</a>
-        </div>
-      </div>
-
-      {/* Loading / Error */}
-      {loading && (
-        <div className="bg-white border border-[#E5E2DC] rounded-lg p-10 text-center mb-6">
-          <p className="text-sm text-[#9B9590]">Carregando dados…</p>
-        </div>
-      )}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-6">
-          <p className="text-sm text-red-700"><span className="font-medium">Erro:</span> {error}</p>
-        </div>
-      )}
-
-      {!loading && (
-        <>
-          {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-              <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Total de vendas</p>
-              <p className="text-3xl font-bold" style={{ color: config.color }}>{totals.total}</p>
-              {slug === "thaisa" && totals.reassigned > 0 && (
-                <p className="text-[10px] text-[#9B9590] mt-1">incluindo {totals.reassigned} do Gabriel</p>
-              )}
-            </div>
-            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-              <p className="text-xs text-[#9B9590] uppercase tracking-wide mb-1">Faturamento</p>
-              <p className="text-3xl font-bold">{fmtBRL(totals.faturamento)}</p>
-              <p className="text-[10px] text-[#9B9590] mt-1">ticket médio {fmtBRL(totals.ticketMedio)}</p>
-            </div>
-
-            {/* Card de comissão */}
-            <div
-              className="border rounded-lg p-5"
-              style={{ backgroundColor: `${config.color}08`, borderColor: `${config.color}33` }}
+          <div className="flex items-center gap-2">
+            <a
+              href={slug === "veri" ? "/vendedoras/thaisa" : "/vendedoras/veri"}
+              className="px-3 py-1.5 font-medium border border-[#E5E2DC] rounded-lg bg-white hover:bg-[#F9F8F6] transition-colors"
             >
-              <p className="text-xs uppercase tracking-wide mb-1 font-medium" style={{ color: config.color }}>
-                Comissão (R$ 30 / venda)
-              </p>
-              <p className="text-3xl font-bold" style={{ color: config.color }}>{fmtBRL(totals.comissao)}</p>
-              <p className="text-[10px] text-[#9B9590] mt-1">{totals.total} × R$ 30,00</p>
-            </div>
-
-            {/* Card de progressão (desligado) */}
-            <div
-              className={`border rounded-lg p-5 transition-opacity ${progressionEnabled ? "opacity-100" : "opacity-50"}`}
-              style={{ borderStyle: "dashed", borderColor: "#9B9590" }}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-xs uppercase tracking-wide font-medium text-[#6B6560]">
-                  Progressão de comissão
-                </p>
-                {/* Toggle */}
-                <button
-                  onClick={() => setProgressionEnabled((v) => !v)}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                    progressionEnabled ? "bg-green-500" : "bg-[#D6D2CC]"
-                  }`}
-                  aria-label="Ativar progressão de comissão"
-                  title={progressionEnabled ? "Progressão ativa (preview)" : "Inativa — pode começar a valer"}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      progressionEnabled ? "translate-x-4" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-              <p className="text-xl font-bold text-[#6B6560]">
-                {progressionEnabled ? "preview" : "em breve"}
-              </p>
-              <p className="text-[10px] text-[#9B9590] mt-1">
-                {progressionEnabled
-                  ? "regra ainda não definida — apenas demonstrativo"
-                  : "ative quando a regra entrar em vigor"}
-              </p>
-            </div>
+              Ver {slug === "veri" ? "Thaisa" : "Veri"} →
+            </a>
+            <a href="/" className="text-[#C75028] hover:underline">Dashboard</a>
           </div>
+        </div>
 
-          {/* Tabela */}
-          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-10">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        {/* ═══ HERO ═══ */}
+        <div
+          className="relative overflow-hidden rounded-3xl p-8 mb-6 text-white shadow-xl"
+          style={{
+            background: `linear-gradient(135deg, ${config.color} 0%, ${config.colorDark} 100%)`,
+          }}
+        >
+          <div className="absolute -top-10 -right-10 w-56 h-56 rounded-full bg-white/10" />
+          <div className="absolute -bottom-20 -left-10 w-72 h-72 rounded-full bg-white/5" />
+
+          <div className="relative flex items-center justify-between gap-6 flex-wrap">
+            <div className="flex items-center gap-5">
+              <div
+                className="w-20 h-20 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center text-4xl font-bold shadow-inner"
+                style={{ textShadow: "0 2px 6px rgba(0,0,0,0.15)" }}
+              >
+                {config.initial}
+              </div>
               <div>
-                <h3 className="text-xs font-medium tracking-widest uppercase" style={{ color: config.color }}>
-                  HISTÓRICO DE VENDAS · {config.display.toUpperCase()}
-                </h3>
-                <p className="text-[11px] text-[#9B9590] mt-1">
-                  Use os telefones para retomar conversa, descobrir em que etapa do tratamento o lead está e oferecer nova venda.
+                <p className="text-[11px] uppercase tracking-[0.2em] opacity-80 mb-1">VENDEDORA · SLIMA GROWTH</p>
+                <h1 className="text-4xl font-bold leading-tight">{config.display}</h1>
+                <p className="text-sm opacity-90 mt-1">
+                  Histórico completo · use os telefones para iniciar a recompra
                 </p>
               </div>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar nome ou telefone…"
-                className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028] w-64"
-              />
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
-                    <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Cliente</th>
-                    <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Telefone</th>
-                    <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Data</th>
-                    <th className="text-right px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Valor</th>
-                    <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Origem</th>
-                    <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Ação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-10 text-center text-sm text-[#9B9590]">
-                        {unifiedRows.length === 0
-                          ? "Nenhuma venda registrada para esta vendedora ainda."
-                          : "Nenhum resultado para esse filtro."}
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRows.map((r) => {
-                      const wa = whatsappLink(r.phone);
-                      return (
-                        <tr key={r.key} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
-                          <td className="px-4 py-2.5 font-medium">{r.name}</td>
-                          <td className="px-4 py-2.5 text-[#6B6560] font-mono text-xs">{fmtPhone(r.phone)}</td>
-                          <td className="px-4 py-2.5 text-[#6B6560]">{fmtDateBR(r.date)}</td>
-                          <td className="px-4 py-2.5 text-right font-semibold">
-                            {r.value > 0 ? fmtBRL(r.value) : "—"}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {r.reassigned ? (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded bg-amber-50 text-amber-700">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                                Transferida do Gabriel
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded"
-                                style={{ backgroundColor: `${config.color}15`, color: config.color }}>
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: config.color }} />
-                                {r.originalVendedor}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {wa ? (
-                              <a
-                                href={wa}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
-                              >
-                                WhatsApp →
-                              </a>
-                            ) : (
-                              <span className="text-[11px] text-[#9B9590]">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-                {filteredRows.length > 0 && (
-                  <tfoot>
-                    <tr className="bg-[#FAFAF8] font-bold border-t-2 border-[#E5E2DC]">
-                      <td className="px-4 py-3" colSpan={3}>
-                        Total ({filteredRows.length} venda{filteredRows.length > 1 ? "s" : ""})
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {fmtBRL(filteredRows.reduce((s, r) => s + r.value, 0))}
-                      </td>
-                      <td colSpan={2} className="px-4 py-3 text-[#6B6560] text-xs font-normal">
-                        Comissão: {fmtBRL(filteredRows.length * COMMISSION_PER_SALE)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
+            <div className="text-right">
+              <p className="text-[11px] uppercase tracking-[0.2em] opacity-80">
+                Comissão de {totals.monthLabel} {totals.monthYear}
+              </p>
+              <p className="text-4xl font-bold mt-1">{fmtBRL(totals.comissao)}</p>
+              <p className="text-xs opacity-80 mt-1">
+                {totals.comissaoBase} venda{totals.comissaoBase === 1 ? "" : "s"} no mês × R$ 30,00
+              </p>
+              <p className="text-[10px] opacity-70 mt-1">
+                Faturamento do mês: {fmtBRL(totals.faturamentoMes)}
+              </p>
             </div>
           </div>
-        </>
-      )}
+        </div>
+
+        {/* Loading / Error */}
+        {loading && (
+          <div className="bg-white border border-[#E5E2DC] rounded-2xl p-10 text-center mb-6">
+            <p className="text-sm text-[#9B9590]">Carregando dados…</p>
+          </div>
+        )}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 mb-6">
+            <p className="text-sm text-red-700"><span className="font-medium">Erro:</span> {error}</p>
+          </div>
+        )}
+
+        {!loading && (
+          <>
+            {/* ═══ KPI ROW ═══ */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <button
+                onClick={() => setShowOnlyUnassigned(false)}
+                className={`text-left bg-white border rounded-2xl p-5 transition-all ${
+                  !showOnlyUnassigned ? "border-[#1A1A1A] shadow-sm" : "border-[#E5E2DC] hover:border-[#9B9590]"
+                }`}
+              >
+                <p className="text-[11px] text-[#9B9590] uppercase tracking-wide mb-1">Total na lista</p>
+                <p className="text-3xl font-bold" style={{ color: config.color }}>{totals.total}</p>
+                <p className="text-[10px] text-[#9B9590] mt-1">
+                  {totals.ownedCount} próprias
+                  {slug === "thaisa" && totals.reassigned > 0 && ` · ${totals.reassigned} Gabriel`}
+                  {totals.unassigned > 0 && ` · ${totals.unassigned} sem vendedor`}
+                </p>
+              </button>
+
+              <div className="bg-white border border-[#E5E2DC] rounded-2xl p-5">
+                <p className="text-[11px] text-[#9B9590] uppercase tracking-wide mb-1">Faturamento</p>
+                <p className="text-3xl font-bold">{fmtBRL(totals.faturamento)}</p>
+                <p className="text-[10px] text-[#9B9590] mt-1">ticket médio {fmtBRL(totals.ticketMedio)}</p>
+              </div>
+
+              <button
+                onClick={() => setShowOnlyUnassigned((v) => !v)}
+                className={`text-left bg-white border rounded-2xl p-5 transition-all ${
+                  showOnlyUnassigned ? "border-amber-400 shadow-sm" : "border-[#E5E2DC] hover:border-amber-300"
+                }`}
+              >
+                <p className="text-[11px] uppercase tracking-wide mb-1 text-amber-700">Sem vendedor</p>
+                <p className="text-3xl font-bold text-amber-700">{totals.unassigned}</p>
+                <p className="text-[10px] text-[#9B9590] mt-1">
+                  {showOnlyUnassigned ? "filtrando…" : "clique para filtrar"}
+                </p>
+              </button>
+
+              {/* Card de progressão (desligado) */}
+              <div
+                className={`border-2 border-dashed rounded-2xl p-5 transition-opacity ${
+                  progressionEnabled ? "opacity-100 border-green-400" : "opacity-60 border-[#9B9590]"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[11px] uppercase tracking-wide font-medium text-[#6B6560]">
+                    Progressão
+                  </p>
+                  <button
+                    onClick={() => setProgressionEnabled((v) => !v)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      progressionEnabled ? "bg-green-500" : "bg-[#D6D2CC]"
+                    }`}
+                    aria-label="Ativar progressão de comissão"
+                    title={progressionEnabled ? "Progressão ativa (preview)" : "Inativa — pode começar a valer"}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        progressionEnabled ? "translate-x-4" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                <p className="text-lg font-bold text-[#6B6560]">
+                  {progressionEnabled ? "ativa (preview)" : "em breve"}
+                </p>
+                <p className="text-[10px] text-[#9B9590] mt-1">
+                  Hoje: R$ 30/venda do mês. Ative quando regra entrar em vigor.
+                </p>
+              </div>
+            </div>
+
+            {/* ═══ CALENDÁRIO DE VENDAS ═══ */}
+            {calendarMonth && (
+              <div className="bg-white border border-[#E5E2DC] rounded-2xl p-6 mb-6">
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <h3 className="text-xs font-medium tracking-widest uppercase" style={{ color: config.color }}>
+                      CALENDÁRIO DE VENDAS
+                    </h3>
+                    <p className="text-[11px] text-[#9B9590] mt-1">
+                      Cada ponto representa uma venda registrada nesse dia.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => navMonth(-1)}
+                      className="w-8 h-8 rounded-lg border border-[#E5E2DC] hover:bg-[#F9F8F6] transition-colors text-sm"
+                      aria-label="Mês anterior"
+                    >
+                      ‹
+                    </button>
+                    <p className="text-sm font-semibold w-36 text-center">
+                      {MONTH_NAMES[calendarMonth.month - 1]} {calendarMonth.year}
+                    </p>
+                    <button
+                      onClick={() => navMonth(1)}
+                      className="w-8 h-8 rounded-lg border border-[#E5E2DC] hover:bg-[#F9F8F6] transition-colors text-sm"
+                      aria-label="Próximo mês"
+                    >
+                      ›
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 mb-2">
+                  {WEEK_DAYS.map((w, i) => (
+                    <div key={i} className="text-[10px] font-semibold text-center text-[#9B9590] uppercase tracking-wider py-1">
+                      {w}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5">
+                  {calendarDays.map((cell, i) => {
+                    if (cell.day === null) {
+                      return <div key={i} className="aspect-square" />;
+                    }
+                    const intensity = maxDayCount > 0 ? cell.count / maxDayCount : 0;
+                    const hasSale = cell.count > 0;
+                    return (
+                      <div
+                        key={i}
+                        className={`aspect-square rounded-xl border flex flex-col items-center justify-center text-xs transition-all ${
+                          hasSale
+                            ? "border-transparent shadow-sm"
+                            : "border-[#F0EDEA] bg-[#FAFAF8]"
+                        }`}
+                        style={hasSale ? {
+                          backgroundColor: `${config.color}${Math.round(15 + intensity * 30).toString(16).padStart(2, "0")}`,
+                        } : undefined}
+                        title={hasSale ? `${cell.count} venda${cell.count > 1 ? "s" : ""} · ${fmtBRL(cell.total)}` : "Sem vendas"}
+                      >
+                        <span className={`font-semibold ${hasSale ? "text-[#1A1A1A]" : "text-[#9B9590]"}`}>
+                          {cell.day}
+                        </span>
+                        {hasSale && (
+                          <div className="flex gap-0.5 mt-0.5">
+                            {Array.from({ length: Math.min(cell.count, 4) }).map((_, j) => (
+                              <span
+                                key={j}
+                                className="w-1.5 h-1.5 rounded-full"
+                                style={{ backgroundColor: config.color }}
+                              />
+                            ))}
+                            {cell.count > 4 && (
+                              <span className="text-[8px] font-bold ml-0.5" style={{ color: config.color }}>
+                                +{cell.count - 4}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Mini legenda */}
+                <div className="flex items-center justify-end gap-2 mt-4 text-[10px] text-[#9B9590]">
+                  <span>menos</span>
+                  {[0.15, 0.3, 0.5, 0.7, 1].map((op, i) => (
+                    <span
+                      key={i}
+                      className="w-3 h-3 rounded"
+                      style={{ backgroundColor: `${config.color}${Math.round(op * 80).toString(16).padStart(2, "0")}` }}
+                    />
+                  ))}
+                  <span>mais</span>
+                </div>
+              </div>
+            )}
+
+            {/* ═══ TABELA DE HISTÓRICO ═══ */}
+            <div className="bg-white border border-[#E5E2DC] rounded-2xl p-6 mb-10">
+              <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
+                <div>
+                  <h3 className="text-xs font-medium tracking-widest uppercase" style={{ color: config.color }}>
+                    HISTÓRICO PARA RECOMPRA
+                  </h3>
+                  <p className="text-[11px] text-[#9B9590] mt-1 max-w-md">
+                    Leads mais antigos no topo — esses são os principais alvos de recompra. Toque no WhatsApp para retomar a conversa.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setSortOrder((s) => (s === "asc" ? "desc" : "asc"))}
+                    className="px-3 py-1.5 text-xs font-medium border border-[#E5E2DC] rounded-lg bg-white hover:bg-[#F9F8F6] transition-colors inline-flex items-center gap-1.5"
+                    title="Ordenar por data"
+                  >
+                    {sortOrder === "asc" ? "↑ Mais antigos primeiro" : "↓ Mais recentes primeiro"}
+                  </button>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar nome ou telefone…"
+                    className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028] w-56"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Cliente</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Telefone</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">
+                        Data {sortOrder === "asc" ? "↑" : "↓"}
+                      </th>
+                      <th className="text-right px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Valor</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Origem</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-10 text-center text-sm text-[#9B9590]">
+                          {unifiedRows.length === 0
+                            ? "Nenhuma venda registrada ainda."
+                            : "Nenhum resultado para esse filtro."}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredRows.map((r) => {
+                        const wa = whatsappLink(r.phone);
+                        const days = daysSince(r.date);
+                        const isRecompra = days >= 45;
+                        const isCurrentMonth = r.date.startsWith(totals.monthPrefix);
+                        const rowBg = isRecompra
+                          ? "bg-rose-50/60 hover:bg-rose-50"
+                          : isCurrentMonth
+                          ? "bg-emerald-50/60 hover:bg-emerald-50"
+                          : "hover:bg-[#F9F8F6]";
+                        const rowAccent = isRecompra
+                          ? "#E11D48"
+                          : isCurrentMonth
+                          ? "#059669"
+                          : null;
+                        const badgeStyle =
+                          r.status === "reassigned"
+                            ? { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500", label: "Do Gabriel" }
+                            : r.status === "unassigned"
+                            ? { bg: "bg-[#F0EDEA]", text: "text-[#6B6560]", dot: "bg-[#9B9590]", label: "Sem vendedor" }
+                            : {
+                                bg: "",
+                                text: "",
+                                dot: "",
+                                label: r.originalVendedor,
+                              };
+                        return (
+                          <tr
+                            key={r.key}
+                            className={`border-b border-[#F0EDEA] transition-colors ${rowBg}`}
+                            style={rowAccent ? { boxShadow: `inset 3px 0 0 0 ${rowAccent}` } : undefined}
+                          >
+                            <td className="px-4 py-3 font-medium">{r.name}</td>
+                            <td className="px-4 py-3 text-[#6B6560] font-mono text-xs">{fmtPhone(r.phone)}</td>
+                            <td className="px-4 py-3">
+                              <p className="text-[#1A1A1A] text-xs">{fmtDateBR(r.date)}</p>
+                              <p className={`text-[10px] font-medium`}
+                                 style={{ color: rowAccent || "#9B9590" }}>
+                                {isCurrentMonth
+                                  ? "deste mês"
+                                  : isRecompra
+                                  ? `recompra · ${relativeLabel(r.date)}`
+                                  : `${relativeLabel(r.date)} atrás`}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold">
+                              {r.value > 0 ? fmtBRL(r.value) : "—"}
+                            </td>
+                            <td className="px-4 py-3">
+                              {r.status === "owned" ? (
+                                <span
+                                  className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded"
+                                  style={{ backgroundColor: `${config.color}15`, color: config.color }}
+                                >
+                                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: config.color }} />
+                                  {r.originalVendedor}
+                                </span>
+                              ) : (
+                                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded ${badgeStyle.bg} ${badgeStyle.text}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${badgeStyle.dot}`} />
+                                  {badgeStyle.label}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              {wa ? (
+                                <a
+                                  href={wa}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                                >
+                                  WhatsApp →
+                                </a>
+                              ) : (
+                                <span className="text-[11px] text-[#9B9590]">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                  {filteredRows.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-[#FAFAF8] font-bold border-t-2 border-[#E5E2DC]">
+                        <td className="px-4 py-3" colSpan={3}>
+                          Total exibido ({filteredRows.length} venda{filteredRows.length > 1 ? "s" : ""})
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {fmtBRL(filteredRows.reduce((s, r) => s + r.value, 0))}
+                        </td>
+                        <td colSpan={2} className="px-4 py-3 text-[#6B6560] text-xs font-normal">
+                          Comissão (próprias + transferidas): {fmtBRL(totals.comissao)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+
+              {/* Legenda das cores */}
+              <div className="flex flex-wrap items-center gap-4 mt-4 text-[11px] text-[#6B6560]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded bg-emerald-100 border border-emerald-300" />
+                  Venda deste mês
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded bg-rose-100 border border-rose-300" />
+                  Recompra · ≥ 45 dias sem comprar
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-[#9B9590]">
+                  <span className="inline-block w-3 h-3 rounded bg-white border border-[#E5E2DC]" />
+                  Vendas anteriores
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
