@@ -16,21 +16,6 @@ interface SaleRow {
   vendedor: string | null;
 }
 
-interface KommoLead {
-  kommoId?: number;
-  name: string;
-  phone: string;
-  price?: number;
-  createdAt: string;
-  closedAt: string;
-  vendedora: string;
-}
-
-interface KommoData {
-  wonLeads: KommoLead[];
-  lostLeads: KommoLead[];
-}
-
 // ─── Config ───────────────────────────────────────────────────────────────
 const COMMISSION_PER_SALE = 30;
 
@@ -130,7 +115,6 @@ interface UnifiedRow {
   value: number;
   originalVendedor: string;
   status: "owned" | "reassigned" | "unassigned";
-  source: "sistema" | "kommo";
 }
 
 type SortOrder = "asc" | "desc";
@@ -144,7 +128,6 @@ export default function VendedoraDetailPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sales, setSales] = useState<SaleRow[]>([]);
-  const [kommo, setKommo] = useState<KommoData | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [progressionEnabled, setProgressionEnabled] = useState(false);
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc"); // mais antigos no topo (recompra)
@@ -162,16 +145,14 @@ export default function VendedoraDetailPage() {
     setLoading(true);
     setError("");
     try {
-      const [salesRes, kommoRes] = await Promise.all([fetch("/api/sales"), fetch("/api/kommo")]);
-      if (salesRes.status === 401 || kommoRes.status === 401) {
+      const res = await fetch("/api/sales");
+      if (res.status === 401) {
         setAuthed(false);
         return;
       }
-      const salesJson = await salesRes.json();
-      const kommoJson = await kommoRes.json();
-      if (salesJson.error) setError(salesJson.error);
-      else setSales(salesJson.sales || []);
-      if (!kommoJson.error) setKommo(kommoJson);
+      const json = await res.json();
+      if (json.error) setError(json.error);
+      else setSales(json.sales || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -182,12 +163,14 @@ export default function VendedoraDetailPage() {
     if (authed) loadData();
   }, [authed, loadData]);
 
-  // ─── Construção dos rows unificados ─────────────────────────────────────
+  // ─── Construção dos rows (apenas Supabase / API local) ──────────────────
+  // O endpoint /api/sales já resolve o vendedor via leads.assigned_seller
+  // (Supabase) com fallback no campo "Vendedor(a)" do Kommo por telefone.
+  // Por isso não precisamos de um segundo fetch no Kommo aqui.
   const unifiedRows: UnifiedRow[] = useMemo(() => {
     if (!config) return [];
 
     const map = new Map<string, UnifiedRow>();
-    const myCats = new Set(config.match.map((m) => m.toLowerCase()));
 
     const include = (cat: ReturnType<typeof categorizeVendedor>): UnifiedRow["status"] | null => {
       // "sem vendedor" entra nas duas páginas
@@ -207,6 +190,7 @@ export default function VendedoraDetailPage() {
       if (!status) continue;
       const value = s.order_value ? parseFloat(s.order_value) : 0;
       const k = phoneKey(s.phone) || `sys-${s.id}`;
+      if (map.has(k)) continue;
       map.set(k, {
         key: k,
         name: s.name || "—",
@@ -215,33 +199,11 @@ export default function VendedoraDetailPage() {
         value,
         originalVendedor: (s.vendedor || "").trim() || "—",
         status,
-        source: "sistema",
       });
     }
 
-    if (kommo) {
-      for (const l of kommo.wonLeads) {
-        const cat = categorizeVendedor(l.vendedora);
-        const status = include(cat);
-        if (!status) continue;
-        const k = phoneKey(l.phone) || `kommo-${l.kommoId}`;
-        if (map.has(k)) continue; // sistema tem prioridade
-        const date = (l.closedAt && l.closedAt !== "—" ? l.closedAt : l.createdAt).slice(0, 10);
-        map.set(k, {
-          key: k,
-          name: l.name || "—",
-          phone: l.phone || "",
-          date,
-          value: l.price || 0,
-          originalVendedor: (l.vendedora || "").trim() || "—",
-          status,
-          source: "kommo",
-        });
-      }
-    }
-
     return Array.from(map.values());
-  }, [sales, kommo, slug, config]);
+  }, [sales, slug, config]);
 
   // ─── Calendário (default = mês mais recente com venda) ──────────────────
   useEffect(() => {
@@ -320,8 +282,6 @@ export default function VendedoraDetailPage() {
     const reassigned = unifiedRows.filter((r) => r.status === "reassigned").length;
     const unassigned = unifiedRows.filter((r) => r.status === "unassigned").length;
     const total = unifiedRows.length;
-    const faturamento = unifiedRows.reduce((s, r) => s + r.value, 0);
-    const ticketMedio = total > 0 ? faturamento / total : 0;
 
     // Comissão = R$ 30 × vendas do MÊS ATUAL (apenas owned + reassigned).
     const monthRows = unifiedRows.filter(
@@ -333,7 +293,6 @@ export default function VendedoraDetailPage() {
 
     return {
       total, ownedCount, reassigned, unassigned,
-      faturamento, ticketMedio,
       comissao, comissaoBase, faturamentoMes,
       monthLabel: MONTH_NAMES[curMonth - 1],
       monthYear: curYear,
@@ -451,7 +410,7 @@ export default function VendedoraDetailPage() {
         {!loading && (
           <>
             {/* ═══ KPI ROW ═══ */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
               <button
                 onClick={() => setShowOnlyUnassigned(false)}
                 className={`text-left bg-white border rounded-2xl p-5 transition-all ${
@@ -466,12 +425,6 @@ export default function VendedoraDetailPage() {
                   {totals.unassigned > 0 && ` · ${totals.unassigned} sem vendedor`}
                 </p>
               </button>
-
-              <div className="bg-white border border-[#E5E2DC] rounded-2xl p-5">
-                <p className="text-[11px] text-[#9B9590] uppercase tracking-wide mb-1">Faturamento</p>
-                <p className="text-3xl font-bold">{fmtBRL(totals.faturamento)}</p>
-                <p className="text-[10px] text-[#9B9590] mt-1">ticket médio {fmtBRL(totals.ticketMedio)}</p>
-              </div>
 
               <button
                 onClick={() => setShowOnlyUnassigned((v) => !v)}
