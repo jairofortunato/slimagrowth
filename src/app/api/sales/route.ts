@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
   // Fetch ALL paid leads (no date filter here — date filtering is done via orders)
   const leadsQuery = supabase
     .from("leads")
-    .select("id, name, phone, checkout_path, payment_status, order_value, referring_afiliado_id, created_at, assigned_seller")
+    .select("id, name, phone, checkout_path, payment_status, order_value, referring_afiliado_id, created_at, assigned_seller, seller_note")
     .eq("payment_status", "paid")
     .order("created_at", { ascending: false });
 
@@ -185,6 +185,7 @@ export async function GET(req: NextRequest) {
       referring_afiliado_id: l.referring_afiliado_id,
       is_agendamento: (leadMaxOrder[l.id] || 0) < 10000,
       vendedor,
+      seller_note: l.seller_note || null,
     };
   });
 

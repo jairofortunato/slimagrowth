@@ -14,6 +14,7 @@ interface SaleRow {
   is_affiliate: boolean;
   is_agendamento: boolean;
   vendedor: string | null;
+  seller_note: string | null;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ interface UnifiedRow {
   value: number;
   originalVendedor: string;
   status: "owned" | "reassigned" | "unassigned";
+  sellerNote: string | null;
 }
 
 type SortOrder = "asc" | "desc";
@@ -133,6 +135,60 @@ const SELLER_SLUG_OPTIONS = [
   { slug: "gabriel", label: "Gabriel" },
   { slug: "jairo", label: "Jairo" },
 ] as const;
+
+// ─── Célula editável para a nota do vendedor (debounce + autosave) ────────
+function SellerNoteCell({
+  leadId,
+  initialValue,
+  onSave,
+}: {
+  leadId: string;
+  initialValue: string;
+  onSave: (leadId: string, note: string) => Promise<void>;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  // Mantém o valor sincronizado quando a linha é recarregada externamente.
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue]);
+
+  // Debounce: salva 800 ms após a última alteração.
+  useEffect(() => {
+    if (value === initialValue) return;
+    setStatus("saving");
+    const t = setTimeout(async () => {
+      try {
+        await onSave(leadId, value);
+        setStatus("saved");
+        const s = setTimeout(() => setStatus("idle"), 1500);
+        return () => clearTimeout(s);
+      } catch {
+        setStatus("error");
+      }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [value, initialValue, leadId, onSave]);
+
+  return (
+    <div className="relative">
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Ex: não tem dinheiro agora · vai voltar em 30d · pediu para esperar…"
+        rows={2}
+        maxLength={2000}
+        className="w-full px-2 py-1.5 text-xs border border-[#E5E2DC] rounded bg-white focus:outline-none focus:border-[#C75028] resize-y min-h-[44px] placeholder:text-[#B5B0AA]"
+      />
+      <div className="absolute -bottom-4 right-0 text-[9px] pointer-events-none">
+        {status === "saving" && <span className="text-[#9B9590]">salvando…</span>}
+        {status === "saved" && <span className="text-green-600">✓ salvo</span>}
+        {status === "error" && <span className="text-red-600">erro</span>}
+      </div>
+    </div>
+  );
+}
 
 export default function VendedoraDetailPage() {
   const params = useParams<{ nome: string }>();
@@ -214,6 +270,33 @@ export default function VendedoraDetailPage() {
     [loadData],
   );
 
+  // ─── Salvar nota do vendedor (atualiza leads.seller_note) ───────────────
+  const saveNote = useCallback(
+    async (leadId: string, note: string) => {
+      const trimmed = note.trim();
+      // Optimistic update.
+      setSales((prev) =>
+        prev.map((s) => (s.id === leadId ? { ...s, seller_note: trimmed || null } : s)),
+      );
+      try {
+        const res = await fetch("/api/sales/seller-note", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId, note: trimmed }),
+        });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          setAssignError(json.error || `Falha ao salvar nota (${res.status})`);
+          await loadData();
+        }
+      } catch (e) {
+        setAssignError(e instanceof Error ? e.message : String(e));
+        await loadData();
+      }
+    },
+    [loadData],
+  );
+
   // ─── Construção dos rows (apenas Supabase / API local) ──────────────────
   // O endpoint /api/sales já resolve o vendedor via leads.assigned_seller
   // (Supabase) com fallback no campo "Vendedor(a)" do Kommo por telefone.
@@ -251,6 +334,7 @@ export default function VendedoraDetailPage() {
         value,
         originalVendedor: (s.vendedor || "").trim() || "—",
         status,
+        sellerNote: s.seller_note ?? null,
       });
     }
 
@@ -724,7 +808,7 @@ export default function VendedoraDetailPage() {
                     HISTÓRICO PARA RECOMPRA
                   </h3>
                   <p className="text-[11px] text-[#9B9590] mt-1 max-w-md">
-                    Leads mais antigos no topo — esses são os principais alvos de recompra. Toque no WhatsApp para retomar a conversa. Linhas "sem vendedor" têm um dropdown na coluna Origem para você atribuir o cliente direto ao banco.
+                    Leads mais antigos no topo — esses são os principais alvos de recompra. Toque no WhatsApp para retomar a conversa, anote o que aconteceu no campo Status / Observação (salva sozinho) e use o dropdown da coluna Origem para atribuir clientes sem vendedor.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -756,13 +840,14 @@ export default function VendedoraDetailPage() {
                       </th>
                       <th className="text-right px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Valor</th>
                       <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Origem</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide w-[280px]">Status / Observação</th>
                       <th className="text-left px-4 py-2.5 font-medium text-[#6B6560] text-[11px] uppercase tracking-wide">Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-4 py-10 text-center text-sm text-[#9B9590]">
+                        <td colSpan={7} className="px-4 py-10 text-center text-sm text-[#9B9590]">
                           {unifiedRows.length === 0
                             ? "Nenhuma venda registrada ainda."
                             : "Nenhum resultado para esse filtro."}
@@ -855,6 +940,17 @@ export default function VendedoraDetailPage() {
                                 </span>
                               )}
                             </td>
+                            <td className="px-4 py-3 align-top">
+                              {r.leadId ? (
+                                <SellerNoteCell
+                                  leadId={r.leadId}
+                                  initialValue={r.sellerNote || ""}
+                                  onSave={saveNote}
+                                />
+                              ) : (
+                                <span className="text-[11px] text-[#9B9590]">—</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3">
                               {wa ? (
                                 <a
@@ -883,8 +979,8 @@ export default function VendedoraDetailPage() {
                         <td className="px-4 py-3 text-right">
                           {fmtBRL(filteredRows.reduce((s, r) => s + r.value, 0))}
                         </td>
-                        <td colSpan={2} className="px-4 py-3 text-[#6B6560] text-xs font-normal">
-                          Comissão (próprias + transferidas): {fmtBRL(totals.comissao)}
+                        <td colSpan={3} className="px-4 py-3 text-[#6B6560] text-xs font-normal">
+                          Comissão do mês ({totals.monthLabel}): {fmtBRL(totals.comissao)} · só vendas próprias
                         </td>
                       </tr>
                     </tfoot>
