@@ -116,6 +116,7 @@ const WEEK_DAYS = ["D", "S", "T", "Q", "Q", "S", "S"];
 // ─── Tipo unificado da tabela ─────────────────────────────────────────────
 interface UnifiedRow {
   key: string;
+  leadId: string | null; // null se não veio do Supabase
   name: string;
   phone: string;
   date: string; // YYYY-MM-DD
@@ -125,6 +126,13 @@ interface UnifiedRow {
 }
 
 type SortOrder = "asc" | "desc";
+
+const SELLER_SLUG_OPTIONS = [
+  { slug: "veridiana", label: "Veridiana" },
+  { slug: "thaisa", label: "Thaisa" },
+  { slug: "gabriel", label: "Gabriel" },
+  { slug: "jairo", label: "Jairo" },
+] as const;
 
 export default function VendedoraDetailPage() {
   const params = useParams<{ nome: string }>();
@@ -140,6 +148,8 @@ export default function VendedoraDetailPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc"); // mais antigos no topo (recompra)
   const [calendarMonth, setCalendarMonth] = useState<{ year: number; month: number } | null>(null);
   const [showOnlyUnassigned, setShowOnlyUnassigned] = useState(false);
+  const [assigningLeadId, setAssigningLeadId] = useState<string | null>(null);
+  const [assignError, setAssignError] = useState<string>("");
 
   // Auth check
   useEffect(() => {
@@ -169,6 +179,40 @@ export default function VendedoraDetailPage() {
   useEffect(() => {
     if (authed) loadData();
   }, [authed, loadData]);
+
+  // ─── Atribuir vendedor manualmente (atualiza leads.assigned_seller) ─────
+  const assignSeller = useCallback(
+    async (leadId: string, newSlug: string | null) => {
+      setAssigningLeadId(leadId);
+      setAssignError("");
+      // Optimistic: já atualiza localmente para resposta instantânea.
+      const display = newSlug
+        ? SELLER_SLUG_OPTIONS.find((o) => o.slug === newSlug)?.label ?? null
+        : null;
+      setSales((prev) =>
+        prev.map((s) => (s.id === leadId ? { ...s, vendedor: display } : s)),
+      );
+      try {
+        const res = await fetch("/api/sales/assign-seller", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leadId, slug: newSlug }),
+        });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          setAssignError(json.error || `Falha ao salvar (${res.status})`);
+          // Rollback: recarrega do servidor.
+          await loadData();
+        }
+      } catch (e) {
+        setAssignError(e instanceof Error ? e.message : String(e));
+        await loadData();
+      } finally {
+        setAssigningLeadId(null);
+      }
+    },
+    [loadData],
+  );
 
   // ─── Construção dos rows (apenas Supabase / API local) ──────────────────
   // O endpoint /api/sales já resolve o vendedor via leads.assigned_seller
@@ -200,6 +244,7 @@ export default function VendedoraDetailPage() {
       if (map.has(k)) continue;
       map.set(k, {
         key: k,
+        leadId: s.id,
         name: s.name || "—",
         phone: s.phone || "",
         date: s.sale_date.slice(0, 10),
@@ -498,6 +543,12 @@ export default function VendedoraDetailPage() {
             <p className="text-sm text-red-700"><span className="font-medium">Erro:</span> {error}</p>
           </div>
         )}
+        {assignError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 mb-6 flex items-center justify-between">
+            <p className="text-sm text-amber-800"><span className="font-medium">Atribuição falhou:</span> {assignError}</p>
+            <button onClick={() => setAssignError("")} className="text-amber-700 hover:underline text-xs">Fechar</button>
+          </div>
+        )}
 
         {!loading && (
           <>
@@ -673,7 +724,7 @@ export default function VendedoraDetailPage() {
                     HISTÓRICO PARA RECOMPRA
                   </h3>
                   <p className="text-[11px] text-[#9B9590] mt-1 max-w-md">
-                    Leads mais antigos no topo — esses são os principais alvos de recompra. Toque no WhatsApp para retomar a conversa.
+                    Leads mais antigos no topo — esses são os principais alvos de recompra. Toque no WhatsApp para retomar a conversa. Linhas "sem vendedor" têm um dropdown na coluna Origem para você atribuir o cliente direto ao banco.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -767,7 +818,29 @@ export default function VendedoraDetailPage() {
                               {r.value > 0 ? fmtBRL(r.value) : "—"}
                             </td>
                             <td className="px-4 py-3">
-                              {r.status === "owned" ? (
+                              {r.status === "unassigned" && r.leadId ? (
+                                <div className="flex items-center gap-1.5">
+                                  <select
+                                    value=""
+                                    disabled={assigningLeadId === r.leadId}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      if (v && r.leadId) assignSeller(r.leadId, v);
+                                    }}
+                                    className="px-2 py-1 text-[11px] border border-dashed border-[#9B9590] rounded bg-[#FAFAF8] text-[#6B6560] hover:bg-white hover:border-solid focus:outline-none focus:border-[#C75028] cursor-pointer transition-colors"
+                                    title="Atribuir vendedor a este cliente"
+                                  >
+                                    <option value="" disabled>
+                                      {assigningLeadId === r.leadId ? "Salvando…" : "+ Atribuir vendedor"}
+                                    </option>
+                                    {SELLER_SLUG_OPTIONS.map((opt) => (
+                                      <option key={opt.slug} value={opt.slug}>
+                                        {opt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ) : r.status === "owned" ? (
                                 <span
                                   className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded"
                                   style={{ backgroundColor: `${config.color}15`, color: config.color }}
