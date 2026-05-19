@@ -298,9 +298,6 @@ export default function VendedoraDetailPage() {
   );
 
   // ─── Construção dos rows (apenas Supabase / API local) ──────────────────
-  // O endpoint /api/sales já resolve o vendedor via leads.assigned_seller
-  // (Supabase) com fallback no campo "Vendedor(a)" do Kommo por telefone.
-  // Por isso não precisamos de um segundo fetch no Kommo aqui.
   const unifiedRows: UnifiedRow[] = useMemo(() => {
     if (!config) return [];
 

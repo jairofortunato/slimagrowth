@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  LineChart, Line, Legend, PieChart, Pie, Cell,
+  Legend, PieChart, Pie, Cell,
 } from "recharts";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -40,25 +40,6 @@ interface SubChannelData {
   faturamento: number;
 }
 
-interface Perf { won: number; lost: number; winRate: number; avgDays: number }
-interface FunnelStage { id: number; name: string; veri: number; thaisa: number; gabriel?: number; total: number }
-interface ActivityDay {
-  date: string;
-  veri: { msgs: number; calls: number; changes: number };
-  thaisa: { msgs: number; calls: number; changes: number };
-}
-interface LeadDetail { kommoId: number; name: string; phone: string; price: number; createdAt: string; closedAt: string; vendedora: string }
-interface KommoData {
-  funnel: FunnelStage[];
-  performance: { veri: Perf; thaisa: Perf; gabriel?: Perf; total: Perf };
-  health: FunnelStage[];
-  staleLeads: { veri: number; thaisa: number; gabriel?: number; total: number };
-  overdueTasks: { veri: number; thaisa: number; total: number };
-  activity: ActivityDay[];
-  wonLeads: LeadDetail[];
-  lostLeads: LeadDetail[];
-}
-
 interface DailySale {
   date: string;
   vendas: number;
@@ -77,38 +58,7 @@ const FORM_COLOR = "#2563EB";
 function fmt(n: number) { return n.toLocaleString("pt-BR"); }
 function fmtCurrency(n: number) { return `R$${n.toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`; }
 function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
-function fmtDays(n: number) { return n > 0 ? `${n.toFixed(1)}d` : "\u2014"; }
 function fmtShort(d: string) { const p = d.split("-"); return `${p[2]}/${p[1]}`; }
-
-// Normalize phone for cross-referencing: strip everything except digits, keep last 8-11 digits
-function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, "");
-  // Brazilian phones: country(55) + DDD(2) + number(8-9) = 12-13 digits
-  // We keep last 11 digits (DDD + number) for matching, or all if shorter
-  if (digits.length >= 11) return digits.slice(-11);
-  if (digits.length >= 8) return digits.slice(-digits.length);
-  return digits;
-}
-
-interface MergedClient {
-  // Supabase (sale) data
-  saleId: string | null;
-  name: string;
-  phone: string;
-  channel: "Ads" | "Afiliados";
-  funnel: "Typebot" | "AG-Direto";
-  tipo: "Venda" | "Agendamento";
-  valor: number;
-  dataPagamento: string;
-  checkoutPath: string;
-  // Kommo (CRM) data
-  kommoMatch: boolean;
-  kommoId: number | null;
-  vendedora: string | null;
-  kommoPrice: number;
-  kmmoCriado: string | null;
-  kmmoFechado: string | null;
-}
 
 function getCurrentMonthRange() {
   const now = new Date();
@@ -145,10 +95,6 @@ export default function ResumoPage() {
   });
   const [affiliateMap, setAffiliateMap] = useState<Record<string, { name: string; referral_code: string; commission_fixed_value: number | null; commission_percentage: number }>>({});
 
-  // Kommo data
-  const [kommo, setKommo] = useState<KommoData | null>(null);
-  const [kommoError, setKommoError] = useState("");
-
   // Consultas vs Compras data
   const [consultasSummary, setConsultasSummary] = useState<{
     totalCompras: number; faturamento: number; pctConsultaPos: number;
@@ -177,21 +123,6 @@ export default function ResumoPage() {
     }
   }, []);
 
-  // ── Fetch Kommo data ─────────────────────────────────────────────────────────
-  const fetchKommo = useCallback(async () => {
-    const { from, to } = getCurrentMonthRange();
-    const params = new URLSearchParams({ from, to });
-    try {
-      const res = await fetch(`/api/kommo?${params}`);
-      if (res.status === 401) return;
-      const json = await res.json();
-      if (json.error) { setKommoError(json.error); return; }
-      setKommo(json);
-    } catch (e: unknown) {
-      setKommoError((e as Error).message);
-    }
-  }, []);
-
   // ── Fetch Consultas vs Compras ─────────────────────────────────────────────
   const fetchConsultas = useCallback(async () => {
     const { from, to } = getCurrentMonthRange();
@@ -212,7 +143,6 @@ export default function ResumoPage() {
       if (r.ok) {
         setAuthed(true);
         fetchSales();
-        fetchKommo();
         fetchConsultas();
       } else {
         setAuthed(false);
@@ -224,9 +154,9 @@ export default function ResumoPage() {
   // Auto-refresh every 5 min
   useEffect(() => {
     if (!authed) return;
-    const iv = setInterval(() => { fetchSales(); fetchKommo(); }, 300000);
+    const iv = setInterval(() => { fetchSales(); }, 300000);
     return () => clearInterval(iv);
-  }, [authed, fetchSales, fetchKommo]);
+  }, [authed, fetchSales]);
 
   // ── Derived data ─────────────────────────────────────────────────────────────
 
@@ -343,122 +273,61 @@ export default function ResumoPage() {
     ].filter(d => d.value > 0);
   }, [subChannelData]);
 
-  // Kommo: vendedoras won leads this month
-  const vendedorasWon = useMemo(() => {
-    if (!kommo) return { veri: [] as LeadDetail[], thaisa: [] as LeadDetail[], gabriel: [] as LeadDetail[] };
-    return {
-      veri: kommo.wonLeads.filter(l => l.vendedora === "Veridiana"),
-      thaisa: kommo.wonLeads.filter(l => l.vendedora === "Thaisa"),
-      gabriel: kommo.wonLeads.filter(l => l.vendedora === "Gabriel"),
+  // Vendedora summary (Supabase: leads.assigned_seller via /api/sales)
+  const vendedorasSummary = useMemo(() => {
+    const init = () => ({ vendas: 0, agendamentos: 0, faturamento: 0 });
+    const map: Record<"Veridiana" | "Thaisa" | "Gabriel" | "sem", { vendas: number; agendamentos: number; faturamento: number }> = {
+      Veridiana: init(), Thaisa: init(), Gabriel: init(), sem: init(),
     };
-  }, [kommo]);
-
-  // ── Cross-reference: Supabase sales ↔ Kommo leads by phone ───────────────
-  const mergedClients = useMemo((): MergedClient[] => {
-    // Build Kommo phone→lead index (won + lost)
-    const kommoByPhone: Record<string, LeadDetail> = {};
-    const kommoByName: Record<string, LeadDetail> = {};
-    const allKommo = [...(kommo?.wonLeads || []), ...(kommo?.lostLeads || [])];
-    for (const k of allKommo) {
-      if (k.phone && k.phone !== "\u2014") {
-        const norm = normalizePhone(k.phone);
-        if (norm.length >= 8) kommoByPhone[norm] = k;
-      }
-      if (k.name && k.name !== "\u2014") {
-        kommoByName[k.name.toLowerCase().trim()] = k;
-      }
+    for (const s of sales) {
+      if (s.checkout_path === "prescription_checkout") continue;
+      const v = (s.vendedor || "").trim();
+      const key = (v === "Veridiana" || v === "Veri") ? "Veridiana"
+        : v === "Thaisa" ? "Thaisa"
+        : v === "Gabriel" ? "Gabriel"
+        : "sem";
+      const val = s.order_value ? parseFloat(s.order_value) : 0;
+      if (s.is_agendamento) map[key].agendamentos++;
+      else map[key].vendas++;
+      map[key].faturamento += val;
     }
+    return map;
+  }, [sales]);
 
-    // Filter sales to Ads + Afiliados only
+  // ── Clients table (Supabase sales only) ──────────────────────────────────
+  interface ClientRow {
+    saleId: string;
+    name: string;
+    phone: string;
+    channel: "Ads" | "Afiliados";
+    funnel: "Typebot" | "AG-Direto";
+    tipo: "Venda" | "Agendamento";
+    valor: number;
+    dataPagamento: string;
+    vendedora: string | null;
+  }
+  const clientsList = useMemo((): ClientRow[] => {
     const relevantSales = sales.filter(s => s.checkout_path !== "prescription_checkout");
-    const usedKommoIds = new Set<number>();
+    return relevantSales.map(s => ({
+      saleId: s.id,
+      name: s.name,
+      phone: s.phone || "—",
+      channel: (s.is_affiliate ? "Afiliados" : "Ads") as "Ads" | "Afiliados",
+      funnel: ((s.checkout_path === "typebot" || s.checkout_path === "agendamento") ? "Typebot" : "AG-Direto") as "Typebot" | "AG-Direto",
+      tipo: (s.is_agendamento ? "Agendamento" : "Venda") as "Venda" | "Agendamento",
+      valor: s.order_value ? parseFloat(s.order_value) : 0,
+      dataPagamento: s.sale_date.slice(0, 10),
+      vendedora: s.vendedor,
+    })).sort((a, b) => (b.dataPagamento || "").localeCompare(a.dataPagamento || ""));
+  }, [sales]);
 
-    const merged: MergedClient[] = relevantSales.map(s => {
-      const channel: "Ads" | "Afiliados" = s.is_affiliate ? "Afiliados" : "Ads";
-      const funnel: "Typebot" | "AG-Direto" = (s.checkout_path === "typebot" || s.checkout_path === "agendamento") ? "Typebot" : "AG-Direto";
-      const tipo: "Venda" | "Agendamento" = s.is_agendamento ? "Agendamento" : "Venda";
-      const valor = s.order_value ? parseFloat(s.order_value) : 0;
-
-      // Try to match by phone first, then by name
-      let match: LeadDetail | null = null;
-      if (s.phone) {
-        const norm = normalizePhone(s.phone);
-        if (norm.length >= 8 && kommoByPhone[norm]) {
-          match = kommoByPhone[norm];
-        }
-      }
-      if (!match && s.name) {
-        const normName = s.name.toLowerCase().trim();
-        if (kommoByName[normName]) {
-          match = kommoByName[normName];
-        }
-      }
-
-      if (match) usedKommoIds.add(match.kommoId);
-
-      return {
-        saleId: s.id,
-        name: s.name,
-        phone: s.phone || "\u2014",
-        channel,
-        funnel,
-        tipo,
-        valor,
-        dataPagamento: s.sale_date.slice(0, 10),
-        checkoutPath: s.checkout_path,
-        kommoMatch: !!match,
-        kommoId: match?.kommoId || null,
-        // Prefer assigned_seller (Supabase) → Kommo Vendedor(a) field via /api/sales,
-        // and only fall back to the Kommo phone-match attribution.
-        vendedora: s.vendedor || match?.vendedora || null,
-        kommoPrice: match?.price || 0,
-        kmmoCriado: match?.createdAt || null,
-        kmmoFechado: match?.closedAt || null,
-      };
-    });
-
-    // Add Kommo won leads that didn't match any Supabase sale (CRM-only wins)
-    for (const k of kommo?.wonLeads || []) {
-      if (usedKommoIds.has(k.kommoId)) continue;
-      merged.push({
-        saleId: null,
-        name: k.name,
-        phone: k.phone,
-        channel: "Ads",
-        funnel: "AG-Direto",
-        tipo: "Venda",
-        valor: 0,
-        dataPagamento: k.closedAt !== "\u2014" ? k.closedAt : "\u2014",
-        checkoutPath: "\u2014",
-        kommoMatch: true,
-        kommoId: k.kommoId,
-        vendedora: k.vendedora,
-        kommoPrice: k.price,
-        kmmoCriado: k.createdAt,
-        kmmoFechado: k.closedAt,
-      });
-    }
-
-    // Sort: most recent first
-    return merged.sort((a, b) => (b.dataPagamento || "").localeCompare(a.dataPagamento || ""));
-  }, [sales, kommo]);
-
-  // Cross-reference stats
-  const matchStats = useMemo(() => {
-    const total = mergedClients.length;
-    const matched = mergedClients.filter(c => c.kommoMatch).length;
-    const unmatched = total - matched;
-    const kommoOnly = mergedClients.filter(c => c.saleId === null).length;
-    return { total, matched, unmatched, kommoOnly };
-  }, [mergedClients]);
-
-  // Search filter for the table
+  // Filters for the clients table
   const [clientSearch, setClientSearch] = useState("");
   const [filterChannel, setFilterChannel] = useState<"all" | "Ads" | "Afiliados">("all");
   const [filterVendedora, setFilterVendedora] = useState<"all" | "Veridiana" | "Thaisa" | "Gabriel" | "sem">("all");
 
   const filteredClients = useMemo(() => {
-    let list = mergedClients;
+    let list = clientsList;
     if (filterChannel !== "all") list = list.filter(c => c.channel === filterChannel);
     if (filterVendedora === "Veridiana") list = list.filter(c => c.vendedora === "Veridiana");
     else if (filterVendedora === "Thaisa") list = list.filter(c => c.vendedora === "Thaisa");
@@ -469,7 +338,14 @@ export default function ResumoPage() {
       list = list.filter(c => c.name.toLowerCase().includes(q) || c.phone.includes(q));
     }
     return list;
-  }, [mergedClients, filterChannel, filterVendedora, clientSearch]);
+  }, [clientsList, filterChannel, filterVendedora, clientSearch]);
+
+  const matchStats = useMemo(() => {
+    const total = clientsList.length;
+    const comVendedora = clientsList.filter(c => !!c.vendedora).length;
+    const semVendedora = total - comVendedora;
+    return { total, comVendedora, semVendedora };
+  }, [clientsList]);
 
   // Funnel comparison data for bar chart
   const funnelCompare = useMemo(() => {
@@ -536,11 +412,10 @@ export default function ResumoPage() {
         </div>
       </div>
 
-      {/* Error banners */}
-      {(error || kommoError) && (
+      {/* Error banner */}
+      {error && (
         <div className="space-y-2 mb-6">
-          {error && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3"><p className="text-sm text-red-700"><span className="font-medium">Erro:</span> {error}</p></div>}
-          {kommoError && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3"><p className="text-sm text-red-700"><span className="font-medium">Kommo:</span> {kommoError}</p></div>}
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3"><p className="text-sm text-red-700"><span className="font-medium">Erro:</span> {error}</p></div>
         </div>
       )}
 
@@ -565,13 +440,13 @@ export default function ResumoPage() {
             conv. {(channelLeads.ads + channelLeads.afiliados) > 0 ? fmtPct(((totalVendas + totalAgendamentos) / (channelLeads.ads + channelLeads.afiliados)) * 100) : "—"}
           </p>
         </div>
-        {kommo && (
-          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-            <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Vendedoras (Ganhos)</p>
-            <p className="text-3xl font-bold">{kommo.performance.total.won}</p>
-            <p className="text-xs text-[#9B9590] mt-1">win rate {fmtPct(kommo.performance.total.winRate)}</p>
-          </div>
-        )}
+        <div className="bg-white border border-[#E5E2DC] rounded-lg p-5">
+          <p className="text-[10px] text-[#9B9590] uppercase tracking-wide mb-1">Com Vendedora</p>
+          <p className="text-3xl font-bold">{matchStats.comVendedora}</p>
+          <p className="text-xs text-[#9B9590] mt-1">
+            {matchStats.total > 0 ? fmtPct((matchStats.comVendedora / matchStats.total) * 100) : "—"} atribuídas · {matchStats.semVendedora} sem
+          </p>
+        </div>
       </div>
 
       {/* ═══ Consultas vs Compras KPIs ═══ */}
@@ -991,351 +866,171 @@ export default function ResumoPage() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* SECTION 4: VENDEDORAS — VERI, THAISA & GABRIEL                        */}
+      {/* SECTION 4: VENDEDORAS — VERI, THAISA & GABRIEL (Supabase)             */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">VENDEDORAS: VERI, THAISA &amp; GABRIEL</h2>
 
-      {kommo ? (
-        <>
-          {/* Performance Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            {[
-              { label: "Veridiana", color: VERI_COLOR, p: kommo.performance.veri, won: vendedorasWon.veri.length },
-              { label: "Thaisa", color: THAISA_COLOR, p: kommo.performance.thaisa, won: vendedorasWon.thaisa.length },
-              { label: "Gabriel", color: "#059669", p: kommo.performance.gabriel ?? { won: 0, lost: 0, winRate: 0, avgDays: 0 }, won: vendedorasWon.gabriel.length },
-              { label: "Total", color: "#1A1A1A", p: kommo.performance.total, won: kommo.wonLeads.length },
-            ].map(({ label, color, p, won }) => (
-              <div key={label} className="bg-white border border-[#E5E2DC] rounded-lg p-5">
-                <div className="flex items-center gap-2 mb-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        {[
+          { label: "Veridiana", color: VERI_COLOR, stats: vendedorasSummary.Veridiana, href: "/vendedoras/veri" },
+          { label: "Thaisa", color: THAISA_COLOR, stats: vendedorasSummary.Thaisa, href: "/vendedoras/thaisa" },
+          { label: "Gabriel", color: "#059669", stats: vendedorasSummary.Gabriel, href: null as string | null },
+        ].map(({ label, color, stats, href }) => {
+          const inner = (
+            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 h-full hover:shadow-sm transition-shadow">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
                   <h3 className="text-sm font-bold">{label}</h3>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <p className="text-[10px] text-[#9B9590] uppercase">Ganhos</p>
-                    <p className="text-2xl font-bold text-green-600">{p.won}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-[#9B9590] uppercase">Perdidos</p>
-                    <p className="text-2xl font-bold text-red-500">{p.lost}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-[#9B9590] uppercase">Win Rate</p>
-                    <p className="text-lg font-bold">{fmtPct(p.winRate)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-[#9B9590] uppercase">Tempo Medio</p>
-                    <p className="text-lg font-bold">{fmtDays(p.avgDays)}</p>
-                  </div>
+                {href && <span className="text-[10px] text-[#9B9590]">ver detalhes &rarr;</span>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] text-[#9B9590] uppercase">Vendas</p>
+                  <p className="text-2xl font-bold" style={{ color }}>{stats.vendas}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-[#9B9590] uppercase">Agendamentos</p>
+                  <p className="text-2xl font-bold text-[#14B8A6]">{stats.agendamentos}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[10px] text-[#9B9590] uppercase">Faturamento</p>
+                  <p className="text-lg font-bold">{fmtCurrency(stats.faturamento)}</p>
                 </div>
               </div>
+            </div>
+          );
+          return href ? (
+            <a key={label} href={href} className="block">{inner}</a>
+          ) : (
+            <div key={label}>{inner}</div>
+          );
+        })}
+      </div>
+
+      <p className="text-[10px] text-[#9B9590] mb-8">
+        Atribuicao via <code className="bg-[#F9F8F6] px-1 rounded">leads.assigned_seller</code> (Supabase). Vendas sem vendedora podem ser atribuidas pelas paginas individuais.
+      </p>
+
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* SECTION 5: CLIENTES (Supabase)                                         */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">CLIENTES DO MES</h2>
+
+      {/* Filters */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg p-4 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="text" value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+            placeholder="Buscar nome ou telefone..."
+            className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028] w-56"
+          />
+          <div className="flex rounded-lg overflow-hidden border border-[#E5E2DC]">
+            {(["all", "Ads", "Afiliados"] as const).map(v => (
+              <button key={v} onClick={() => setFilterChannel(v)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${filterChannel === v ? "bg-[#1A1A1A] text-white" : "bg-white text-[#6B6560] hover:bg-[#F9F8F6]"}`}>
+                {v === "all" ? "Todos Canais" : v}
+              </button>
             ))}
           </div>
-
-          {/* Vendedoras Funnel Bar Chart */}
-          {kommo.funnel.length > 0 && (
-            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
-              <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">FUNIL POR VENDEDORA</h3>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart
-                  data={kommo.funnel.map(s => ({ name: s.name, Veridiana: s.veri, Thaisa: s.thaisa, Gabriel: s.gabriel || 0 }))}
-                  layout="vertical"
-                  margin={{ left: 10, right: 20, top: 5, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: "#9B9590" }} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#6B6560" }} width={120} />
-                  <Tooltip contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }} />
-                  <Legend />
-                  <Bar dataKey="Veridiana" fill={VERI_COLOR} radius={[0, 3, 3, 0]} />
-                  <Bar dataKey="Thaisa" fill={THAISA_COLOR} radius={[0, 3, 3, 0]} />
-                  <Bar dataKey="Gabriel" fill="#059669" radius={[0, 3, 3, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Activity Chart */}
-          {kommo.activity.length > 0 && (
-            <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
-              <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">ATIVIDADE DIARIA</h3>
-              {/* Activity totals */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                {(() => {
-                  const totals = kommo.activity.reduce((acc, d) => ({
-                    vMsgs: acc.vMsgs + d.veri.msgs, vCalls: acc.vCalls + d.veri.calls,
-                    tMsgs: acc.tMsgs + d.thaisa.msgs, tCalls: acc.tCalls + d.thaisa.calls,
-                  }), { vMsgs: 0, vCalls: 0, tMsgs: 0, tCalls: 0 });
-                  return [
-                    { label: "Msgs Veri", val: totals.vMsgs, color: VERI_COLOR },
-                    { label: "Msgs Thaisa", val: totals.tMsgs, color: THAISA_COLOR },
-                    { label: "Ligacoes Veri", val: totals.vCalls, color: VERI_COLOR },
-                    { label: "Ligacoes Thaisa", val: totals.tCalls, color: THAISA_COLOR },
-                  ].map(({ label, val, color }) => (
-                    <div key={label} className="bg-[#F9F8F6] rounded-lg p-3 text-center">
-                      <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">{label}</p>
-                      <p className="text-xl font-bold" style={{ color }}>{fmt(val)}</p>
-                    </div>
-                  ));
-                })()}
-              </div>
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart
-                  data={kommo.activity.map(d => ({
-                    date: d.date,
-                    veriMsgs: d.veri.msgs, thaisaMsgs: d.thaisa.msgs,
-                    veriCalls: d.veri.calls, thaisaCalls: d.thaisa.calls,
-                  }))}
-                  margin={{ left: 10, right: 20, top: 5, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F0EDEA" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9B9590" }} tickFormatter={fmtShort} />
-                  <YAxis tick={{ fontSize: 11, fill: "#9B9590" }} />
-                  <Tooltip
-                    contentStyle={{ fontSize: 12, border: "1px solid #E5E2DC", borderRadius: 8 }}
-                    labelFormatter={(v) => { const p = String(v).split("-"); return `${p[2]}/${p[1]}/${p[0]}`; }}
-                  />
-                  <Legend formatter={(v) => {
-                    const m: Record<string, string> = { veriMsgs: "Msgs Veri", thaisaMsgs: "Msgs Thaisa", veriCalls: "Lig. Veri", thaisaCalls: "Lig. Thaisa" };
-                    return m[v] || v;
-                  }} />
-                  <Line type="monotone" dataKey="veriMsgs" stroke={VERI_COLOR} strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="thaisaMsgs" stroke={THAISA_COLOR} strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="veriCalls" stroke={VERI_COLOR} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
-                  <Line type="monotone" dataKey="thaisaCalls" stroke={THAISA_COLOR} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Pipeline Health + Alerts */}
-          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-6">
-            <h3 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">SAUDE DO PIPELINE</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
-                <p className="text-[10px] text-amber-700 uppercase mb-0.5">Tarefas Atrasadas</p>
-                <p className="text-2xl font-bold text-amber-700">{kommo.overdueTasks.total}</p>
-                <p className="text-[10px] text-amber-600">V:{kommo.overdueTasks.veri} T:{kommo.overdueTasks.thaisa}</p>
-              </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-center">
-                <p className="text-[10px] text-orange-700 uppercase mb-0.5">Leads Parados (7d+)</p>
-                <p className="text-2xl font-bold text-orange-700">{kommo.staleLeads.total}</p>
-                <p className="text-[10px] text-orange-600">V:{kommo.staleLeads.veri} T:{kommo.staleLeads.thaisa}</p>
-              </div>
-              <div className="bg-[#F9F8F6] rounded-lg p-3 text-center">
-                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Leads Veri (abertos)</p>
-                <p className="text-2xl font-bold" style={{ color: VERI_COLOR }}>{fmt(kommo.health.reduce((s, h) => s + h.veri, 0))}</p>
-              </div>
-              <div className="bg-[#F9F8F6] rounded-lg p-3 text-center">
-                <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Leads Thaisa (abertos)</p>
-                <p className="text-2xl font-bold" style={{ color: THAISA_COLOR }}>{fmt(kommo.health.reduce((s, h) => s + h.thaisa, 0))}</p>
-              </div>
-            </div>
-            {/* Pipeline table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
-                    <th className="text-left px-3 py-2 font-medium text-[#6B6560]">Etapa</th>
-                    <th className="text-center px-3 py-2 font-medium" style={{ color: VERI_COLOR }}>Veri</th>
-                    <th className="text-center px-3 py-2 font-medium" style={{ color: THAISA_COLOR }}>Thaisa</th>
-                    <th className="text-center px-3 py-2 font-medium text-[#6B6560]">Total</th>
-                    <th className="text-left px-3 py-2 font-medium text-[#6B6560]">Distribuicao</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {kommo.health.map(s => {
-                    const maxTotal = Math.max(...kommo.health.map(h => h.total), 1);
-                    const vPct = s.total > 0 ? (s.veri / s.total) * 100 : 50;
-                    return (
-                      <tr key={s.id} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
-                        <td className="px-3 py-2 text-xs font-medium">{s.name}</td>
-                        <td className="px-3 py-2 text-center text-xs font-semibold">{s.veri}</td>
-                        <td className="px-3 py-2 text-center text-xs font-semibold">{s.thaisa}</td>
-                        <td className="px-3 py-2 text-center text-xs font-bold">{s.total}</td>
-                        <td className="px-3 py-2">
-                          <div className="flex h-4 rounded overflow-hidden" style={{ width: `${Math.max((s.total / maxTotal) * 100, 10)}%` }}>
-                            <div style={{ width: `${vPct}%`, backgroundColor: VERI_COLOR }} />
-                            <div style={{ width: `${100 - vPct}%`, backgroundColor: THAISA_COLOR }} />
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="bg-[#F9F8F6] font-semibold">
-                    <td className="px-3 py-2 text-xs">Total</td>
-                    <td className="px-3 py-2 text-center text-xs">{kommo.health.reduce((s, h) => s + h.veri, 0)}</td>
-                    <td className="px-3 py-2 text-center text-xs">{kommo.health.reduce((s, h) => s + h.thaisa, 0)}</td>
-                    <td className="px-3 py-2 text-center text-xs">{kommo.health.reduce((s, h) => s + h.total, 0)}</td>
-                    <td />
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+          <div className="flex rounded-lg overflow-hidden border border-[#E5E2DC]">
+            {([
+              { key: "all" as const, label: "Todas" },
+              { key: "Veridiana" as const, label: "Veri" },
+              { key: "Thaisa" as const, label: "Thaisa" },
+              { key: "Gabriel" as const, label: "Gabriel" },
+              { key: "sem" as const, label: "Sem vendedora" },
+            ]).map(({ key, label }) => (
+              <button key={key} onClick={() => setFilterVendedora(key)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${filterVendedora === key ? "bg-[#1A1A1A] text-white" : "bg-white text-[#6B6560] hover:bg-[#F9F8F6]"}`}>
+                {label}
+              </button>
+            ))}
           </div>
-
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          {/* SECTION 5: CLIENTES — TABELA CRUZADA (Supabase x Kommo)           */}
-          {/* ═══════════════════════════════════════════════════════════════════ */}
-          <h2 className="text-xs font-medium tracking-widest uppercase text-[#C75028] mb-4">CLIENTES — DADOS CRUZADOS (DB x CRM)</h2>
-
-          {/* Match stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-            <div className="bg-white border border-[#E5E2DC] rounded-lg p-4 text-center">
-              <p className="text-[10px] text-[#9B9590] uppercase mb-0.5">Total Registros</p>
-              <p className="text-2xl font-bold">{matchStats.total}</p>
-            </div>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-              <p className="text-[10px] text-green-700 uppercase mb-0.5">Match DB + Kommo</p>
-              <p className="text-2xl font-bold text-green-700">{matchStats.matched}</p>
-              <p className="text-[10px] text-green-600">{matchStats.total > 0 ? fmtPct((matchStats.matched / matchStats.total) * 100) : "0%"} do total</p>
-            </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
-              <p className="text-[10px] text-amber-700 uppercase mb-0.5">Sem Match no Kommo</p>
-              <p className="text-2xl font-bold text-amber-700">{matchStats.unmatched}</p>
-              <p className="text-[10px] text-amber-600">venda sem vendedora</p>
-            </div>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
-              <p className="text-[10px] text-blue-700 uppercase mb-0.5">So no Kommo</p>
-              <p className="text-2xl font-bold text-blue-700">{matchStats.kommoOnly}</p>
-              <p className="text-[10px] text-blue-600">ganho no CRM, sem pagamento</p>
-            </div>
-          </div>
-
-          {/* Filters */}
-          <div className="bg-white border border-[#E5E2DC] rounded-lg p-4 mb-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                type="text" value={clientSearch} onChange={e => setClientSearch(e.target.value)}
-                placeholder="Buscar nome ou telefone..."
-                className="px-3 py-1.5 text-sm border border-[#E5E2DC] rounded-lg focus:outline-none focus:border-[#C75028] w-56"
-              />
-              <div className="flex rounded-lg overflow-hidden border border-[#E5E2DC]">
-                {(["all", "Ads", "Afiliados"] as const).map(v => (
-                  <button key={v} onClick={() => setFilterChannel(v)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${filterChannel === v ? "bg-[#1A1A1A] text-white" : "bg-white text-[#6B6560] hover:bg-[#F9F8F6]"}`}>
-                    {v === "all" ? "Todos Canais" : v}
-                  </button>
-                ))}
-              </div>
-              <div className="flex rounded-lg overflow-hidden border border-[#E5E2DC]">
-                {([
-                  { key: "all" as const, label: "Todas" },
-                  { key: "Veridiana" as const, label: "Veri" },
-                  { key: "Thaisa" as const, label: "Thaisa" },
-                  { key: "Gabriel" as const, label: "Gabriel" },
-                  { key: "sem" as const, label: "Sem vendedora" },
-                ]).map(({ key, label }) => (
-                  <button key={key} onClick={() => setFilterVendedora(key)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${filterVendedora === key ? "bg-[#1A1A1A] text-white" : "bg-white text-[#6B6560] hover:bg-[#F9F8F6]"}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <span className="text-xs text-[#9B9590] ml-auto">{filteredClients.length} registros</span>
-            </div>
-          </div>
-
-          {/* Merged table */}
-          <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-10">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Nome</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Telefone</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Canal</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Funil</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Tipo</th>
-                    <th className="text-right px-3 py-2.5 font-medium text-[#6B6560]">Valor Pago</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Data Pgto</th>
-                    <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Vendedora</th>
-                    <th className="text-center px-3 py-2.5 font-medium text-[#6B6560]">CRM</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredClients.length === 0 ? (
-                    <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-[#9B9590]">Nenhum registro encontrado</td></tr>
-                  ) : filteredClients.map((c, i) => {
-                    const channelColor = c.channel === "Afiliados" ? AFILIADOS_COLOR : ADS_COLOR;
-                    const funnelColor = c.funnel === "Typebot" ? TYPEBOT_COLOR : FORM_COLOR;
-                    const isKommoOnly = c.saleId === null;
-                    return (
-                      <tr key={i} className={`border-b border-[#F0EDEA] hover:bg-[#F9F8F6] ${isKommoOnly ? "bg-blue-50/40" : ""}`}>
-                        <td className="px-3 py-2.5 font-medium whitespace-nowrap">{c.name}</td>
-                        <td className="px-3 py-2.5 text-[#6B6560] text-xs whitespace-nowrap">{c.phone}</td>
-                        <td className="px-3 py-2.5">
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded" style={{ backgroundColor: `${channelColor}15`, color: channelColor }}>
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: channelColor }} />
-                            {c.channel}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded" style={{ backgroundColor: `${funnelColor}15`, color: funnelColor }}>
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: funnelColor }} />
-                            {c.funnel}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-xs">
-                          {c.tipo === "Agendamento" ? (
-                            <span className="text-[#14B8A6] font-medium">Agend.</span>
-                          ) : (
-                            <span className="text-[#1A1A1A] font-medium">Venda</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right font-medium whitespace-nowrap">
-                          {c.valor > 0 ? fmtCurrency(c.valor) : isKommoOnly && c.kommoPrice > 0 ? (
-                            <span className="text-blue-600">{fmtCurrency(c.kommoPrice)}<span className="text-[10px] text-[#9B9590] ml-1">crm</span></span>
-                          ) : "\u2014"}
-                        </td>
-                        <td className="px-3 py-2.5 text-[#6B6560] text-xs whitespace-nowrap">
-                          {c.dataPagamento !== "\u2014" ? fmtShort(c.dataPagamento) : "\u2014"}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {c.vendedora ? (() => {
-                            const color = c.vendedora === "Veridiana" ? VERI_COLOR
-                              : c.vendedora === "Gabriel" ? "#059669"
-                              : c.vendedora === "Thaisa" ? THAISA_COLOR
-                              : "#9B9590";
-                            const short = c.vendedora === "Veridiana" ? "Veri" : c.vendedora;
-                            return (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded"
-                                style={{ backgroundColor: `${color}15`, color }}>
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
-                                {short}
-                              </span>
-                            );
-                          })() : (
-                            <span className="text-xs text-[#9B9590]">&mdash;</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-center">
-                          {c.kommoMatch ? (
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-100 text-green-700 text-[10px] font-bold" title={`Kommo #${c.kommoId}`}>
-                              &#10003;
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#F0EDEA] text-[#9B9590] text-[10px]" title="Sem match no Kommo">
-                              &mdash;
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-[10px] text-[#9B9590] mt-3">
-              Match feito por telefone (normalizado) e nome. Linhas azuis = lead ganho no Kommo sem pagamento encontrado no banco.
-            </p>
-          </div>
-        </>
-      ) : (
-        <div className="bg-white border border-[#E5E2DC] rounded-lg p-10 text-center mb-10">
-          <p className="text-sm text-[#9B9590]">Carregando dados do Kommo CRM...</p>
+          <span className="text-xs text-[#9B9590] ml-auto">{filteredClients.length} registros</span>
         </div>
-      )}
+      </div>
+
+      {/* Clients table */}
+      <div className="bg-white border border-[#E5E2DC] rounded-lg p-5 mb-10">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-[#F9F8F6] border-b border-[#E5E2DC]">
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Nome</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Telefone</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Canal</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Funil</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Tipo</th>
+                <th className="text-right px-3 py-2.5 font-medium text-[#6B6560]">Valor Pago</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Data Pgto</th>
+                <th className="text-left px-3 py-2.5 font-medium text-[#6B6560]">Vendedora</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredClients.length === 0 ? (
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-[#9B9590]">Nenhum registro encontrado</td></tr>
+              ) : filteredClients.map((c, i) => {
+                const channelColor = c.channel === "Afiliados" ? AFILIADOS_COLOR : ADS_COLOR;
+                const funnelColor = c.funnel === "Typebot" ? TYPEBOT_COLOR : FORM_COLOR;
+                return (
+                  <tr key={i} className="border-b border-[#F0EDEA] hover:bg-[#F9F8F6]">
+                    <td className="px-3 py-2.5 font-medium whitespace-nowrap">{c.name}</td>
+                    <td className="px-3 py-2.5 text-[#6B6560] text-xs whitespace-nowrap">{c.phone}</td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded" style={{ backgroundColor: `${channelColor}15`, color: channelColor }}>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: channelColor }} />
+                        {c.channel}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded" style={{ backgroundColor: `${funnelColor}15`, color: funnelColor }}>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: funnelColor }} />
+                        {c.funnel}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs">
+                      {c.tipo === "Agendamento" ? (
+                        <span className="text-[#14B8A6] font-medium">Agend.</span>
+                      ) : (
+                        <span className="text-[#1A1A1A] font-medium">Venda</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-medium whitespace-nowrap">
+                      {c.valor > 0 ? fmtCurrency(c.valor) : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-[#6B6560] text-xs whitespace-nowrap">
+                      {c.dataPagamento !== "—" ? fmtShort(c.dataPagamento) : "—"}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {c.vendedora ? (() => {
+                        const color = c.vendedora === "Veridiana" ? VERI_COLOR
+                          : c.vendedora === "Gabriel" ? "#059669"
+                          : c.vendedora === "Thaisa" ? THAISA_COLOR
+                          : "#9B9590";
+                        const short = c.vendedora === "Veridiana" ? "Veri" : c.vendedora;
+                        return (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded"
+                            style={{ backgroundColor: `${color}15`, color }}>
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                            {short}
+                          </span>
+                        );
+                      })() : (
+                        <span className="text-xs text-[#9B9590]">&mdash;</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-[10px] text-[#9B9590] mt-3">
+          Dados da Supabase. Vendedora atribuida via <code className="bg-[#F9F8F6] px-1 rounded">leads.assigned_seller</code>.
+        </p>
+      </div>
     </div>
   );
 }
